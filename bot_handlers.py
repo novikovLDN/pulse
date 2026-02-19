@@ -1,17 +1,26 @@
 """Bot handlers.
 
+Мед-советник по лабораторным анализам: при нажатии «Загрузить анализ» пользователь отправляет PDF или JPG
+(скан/фото бланка) → вызов OpenAI API для извлечения структурированных данных и генерации текстового отчёта.
+Отчёт формируется с учётом контекста (возраст, пол, жалобы, препараты и т.д.). Доступны сравнение двух анализов
+и до 2 уточняющих вопросов на отчёт. Хранятся последние 3 анализа.
+
 Логика экранов:
 - start: регистрация/обновление user, реферальный код из args, показ соглашения.
-- terms: принятие = переход в главное меню; без подписки доступны только Подписка, Лояльность, О сервисе.
-- main_menu: при активной подписке — Загрузить, Сравнить, Мои анализы + Подписка, Лояльность, О сервисе.
-- subscription_status: показ даты окончания, лимита запросов, бонусов; иначе предложение оформить подписку.
-- subscription_plans: выбор тарифа → создание платежа, ссылка на оплату.
-- loyalty: описание программы; ссылка и статистика — только для авторизованных.
-- upload: проверка подписки → ожидание файла → извлечение данных → сбор контекста (возраст, пол, жалобы и т.д.) → генерация отчёта → списание запроса, хранение до 3 анализов.
-- recent_analyses: список до 3 последних сессий; выбор одной = краткое содержание + Сравнить/Уточнить/В меню.
-- compare: при ≥2 анализах выбор пары → сравнение через LLM; при одном выбранном — выбор второго.
-- follow_up: до 2 уточняющих вопросов по текущему отчёту, ответ через LLM.
-- admin: только ADMIN_ID; поиск по telegram_id или username → карточка пользователя → выдача 1/3 мес или снятие подписки.
+- terms: принятие = главное меню. Без подписки: только Подписка, Лояльность, Помощь, О сервисе.
+- main_menu (с подпиской): Загрузить анализ, Сравнить, Мои анализы, Как пользоваться, Подписка, Лояльность, Помощь, О сервисе.
+- main_menu (без подписки): Подписка (с текстом «что входит»), Лояльность, Помощь, О сервисе.
+- how_to_use: краткая инструкция в 4 шага (файл → контекст → отчёт → сравнение/уточнение).
+- help: частые вопросы (форматы, лимиты, хранение).
+- subscription_status: при активной подписке — дата окончания, запросы, бонусы; иначе — «что входит в подписку» + оформить.
+- subscription_plans: выбор тарифа → создание платежа YooKassa, ссылка на оплату.
+- loyalty: описание программы; ссылка и статистика начислений.
+- upload: проверка подписки → дисклеймер (информационный характер) → ожидание файла → OpenAI extract → сбор контекста → OpenAI report → списание запроса, хранение до 3.
+- recent_analyses: до 3 последних; выбор одного = краткое содержание + Полный отчёт / Сравнить / Уточнить / В меню.
+- analysis_detail: краткое содержание; кнопка «Полный отчёт» показывает полный текст отчёта (частями при >4096 символов).
+- compare: при ≥2 анализах выбор пары → сравнение через LLM; с одного анализа — выбор второго.
+- follow_up: до 2 уточняющих вопросов по отчёту, ответ через LLM.
+- admin: только ADMIN_ID; поиск по telegram_id или username → выдача/снятие подписки.
 """
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -64,6 +73,10 @@ class T:
     SUB_REQUESTS_LEFT = "Доступно запросов:"
     SUB_BONUS = "Бонусные запросы:"
     SUB_NO_ACTIVE = "Подписка не активна. Оформите подписку для доступа к анализам."
+    SUB_WHAT_INCLUDED = (
+        "В подписку входит: интерпретация анализов по загруженному файлу (PDF/фото), "
+        "сравнение двух анализов, до 2 уточняющих вопросов на отчёт, хранение до 3 последних отчётов."
+    )
     SUB_RENEW_BTN = "🔄 Продлить подписку"
     SUB_GET_BTN = "✅ Оформить подписку"
     SUB_PLANS_TITLE = "Тарифы"
@@ -98,6 +111,7 @@ class T:
 
     # Загрузка и контекст
     UPLOAD_TITLE = "Загрузка анализа"
+    UPLOAD_DISCLAIMER = "Результаты носят информационный характер и не заменяют консультацию врача."
     UPLOAD_PROMPT = "Отправьте один файл: PDF, JPG или PNG (скан или фото бланка результатов)."
     UPLOAD_WRONG_FILE = "Отправьте файл в формате PDF, JPG или PNG."
     UPLOAD_PROCESSING = "Файл обрабатывается."
@@ -127,7 +141,29 @@ class T:
     RECENT_EMPTY = "Сохранённых анализов нет. Загрузите первый анализ из главного меню."
     RECENT_CHOOSE = "Выберите анализ для просмотра краткого содержания:"
     DETAIL_SUMMARY = "Краткое содержание:"
+    DETAIL_FULL_REPORT_BTN = "📄 Полный отчёт"
     ANALYSIS_NOT_FOUND = "Анализ не найден."
+
+    # Как пользоваться
+    HOW_TO_USE_TITLE = "Как пользоваться"
+    HOW_TO_USE_BODY = (
+        "1. Нажмите «Загрузить анализ» и отправьте файл (PDF или фото бланка).\n"
+        "2. Ответьте на несколько вопросов (возраст, пол, жалобы, препараты) для точности отчёта.\n"
+        "3. Получите текстовый отчёт с интерпретацией показателей.\n"
+        "4. При необходимости сравните с другим анализом или задайте до 2 уточняющих вопросов."
+    )
+
+    # Помощь / FAQ
+    HELP_TITLE = "Помощь"
+    HELP_BODY = (
+        "Какие форматы файлов принимаются?\n"
+        "PDF, JPG, PNG — скан или фото бланка результатов анализов.\n\n"
+        "Сколько уточняющих вопросов можно задать?\n"
+        "До 2 вопросов на один отчёт.\n\n"
+        "Сколько анализов хранится?\n"
+        "Последние 3. Новый анализ вытесняет более старый.\n\n"
+        "Отчёт не заменяет консультацию врача и не является диагнозом."
+    )
 
     # Сравнение
     COMPARE_TITLE = "Сравнение анализов"
@@ -336,6 +372,10 @@ class BotHandlers:
             await self._main_menu(update)
         elif data == "about":
             await q.edit_message_text(f"{T.ABOUT_TITLE}\n\n{T.ABOUT_BODY}")
+        elif data == "how_to_use":
+            await self._how_to_use(update)
+        elif data == "help":
+            await self._help(update)
         elif data == "subscription":
             await self._subscription_status(update)
         elif data == "subscription_plans":
@@ -364,6 +404,8 @@ class BotHandlers:
                 await self._do_compare(update, context, [int(parts[0]), int(parts[1])])
         elif data.startswith("follow_up_"):
             await self._follow_up_ask(update, context)
+        elif data.startswith("full_report_"):
+            await self._analysis_full_report(update, int(data.replace("full_report_", "")))
 
     async def _main_menu(self, update: Update):
         uid = update.effective_user.id
@@ -374,14 +416,17 @@ class BotHandlers:
                 [InlineKeyboardButton("📤 Загрузить анализ", callback_data="upload_analysis")],
                 [InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")],
                 [InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")],
+                [InlineKeyboardButton("❓ Как пользоваться", callback_data="how_to_use")],
                 [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
                 [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
+                [InlineKeyboardButton("🆘 Помощь", callback_data="help")],
                 [InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
             ]
         else:
             kb = [
                 [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
                 [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
+                [InlineKeyboardButton("🆘 Помощь", callback_data="help")],
                 [InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
             ]
         msg = T.MENU_CHOOSE
@@ -406,7 +451,7 @@ class BotHandlers:
                 [InlineKeyboardButton(T.BACK, callback_data="back_menu")],
             ]
         else:
-            text = f"{T.SUB_STATUS_TITLE}\n\n{T.SUB_NO_ACTIVE}"
+            text = f"{T.SUB_STATUS_TITLE}\n\n{T.SUB_NO_ACTIVE}\n\n{T.SUB_WHAT_INCLUDED}"
             kb = [
                 [InlineKeyboardButton(T.SUB_GET_BTN, callback_data="subscription_plans")],
                 [InlineKeyboardButton(T.BACK, callback_data="back_menu")],
@@ -456,6 +501,14 @@ class BotHandlers:
         )
         await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="loyalty")]])
 
+    async def _how_to_use(self, update: Update):
+        text = f"{T.HOW_TO_USE_TITLE}\n\n{T.HOW_TO_USE_BODY}"
+        await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
+
+    async def _help(self, update: Update):
+        text = f"{T.HELP_TITLE}\n\n{T.HELP_BODY}"
+        await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
+
     async def _upload_request(self, update: Update):
         user = await self._ensure_user(update)
         if not user:
@@ -463,7 +516,9 @@ class BotHandlers:
         if not SubscriptionManager.can_perform_analysis(self.db, user.id):
             await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
             return
-        await update.callback_query.edit_message_text(f"{T.UPLOAD_TITLE}\n\n{T.UPLOAD_PROMPT}")
+        await update.callback_query.edit_message_text(
+            f"{T.UPLOAD_TITLE}\n\n{T.UPLOAD_DISCLAIMER}\n\n{T.UPLOAD_PROMPT}"
+        )
         FSMStorage.set_state(update.effective_user.id, States.PROCESSING_FILE)
 
     async def handle_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -735,6 +790,7 @@ class BotHandlers:
             return
         summary = (res.report[:500] + "…") if len(res.report) > 500 else res.report
         kb = [
+            [InlineKeyboardButton(T.DETAIL_FULL_REPORT_BTN, callback_data=f"full_report_{session_id}")],
             [
                 InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
                 InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
@@ -742,6 +798,45 @@ class BotHandlers:
             [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
         ]
         await self._reply(update, f"{T.DETAIL_SUMMARY}\n\n{summary}", kb)
+
+    async def _analysis_full_report(self, update: Update, session_id: int):
+        """Show full report text (chunked if > 4096)."""
+        user = await self._ensure_user(update)
+        if not user:
+            return
+        if not SubscriptionManager.is_subscription_active(user):
+            await self._reply(update, MSG_NEED_SUB)
+            return
+        session = self.db.query(AnalysisSession).filter(AnalysisSession.id == session_id, AnalysisSession.user_id == user.id).first()
+        if not session:
+            await self._reply(update, T.ANALYSIS_NOT_FOUND)
+            return
+        res = self.db.query(StructuredResult).filter(StructuredResult.session_id == session_id).first()
+        if not res or not res.report:
+            await self._reply(update, T.ANALYSIS_NOT_FOUND)
+            return
+        report = res.report
+        chunk_size = 4090
+        if len(report) <= chunk_size:
+            await self._reply(update, f"{T.REPORT_HEADER}\n\n{report}", [
+                [
+                    InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
+                    InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
+                ],
+                [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
+            ])
+            return
+        for i in range(0, len(report), chunk_size):
+            chunk = report[i : i + chunk_size]
+            await update.effective_message.reply_text(chunk)
+        kb = [
+            [
+                InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
+                InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
+            ],
+            [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
+        ]
+        await update.effective_message.reply_text("Выберите действие:", reply_markup=InlineKeyboardMarkup(kb))
 
     async def _compare_request(self, update: Update):
         user = await self._ensure_user(update)
