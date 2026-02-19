@@ -93,7 +93,11 @@ class BotHandlers:
             FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
             await self._main_menu(update)
         elif data == "about":
-            await q.edit_message_text("Lab results interpretation. Upload PDF/image, get report, compare, follow-up. Informational only.")
+            await q.edit_message_text(
+                "О сервисе\n\n"
+                "Интерпретация лабораторных результатов. Загрузка PDF/фото, отчёт, сравнение, уточняющие вопросы. "
+                "Только в информационных целях, не заменяет консультацию врача."
+            )
         elif data == "subscription":
             await self._subscription_status(update)
         elif data == "subscription_plans":
@@ -126,44 +130,73 @@ class BotHandlers:
     async def _main_menu(self, update: Update):
         uid = update.effective_user.id
         user = self._user(uid)
-        kb = [
-            [InlineKeyboardButton("Upload", callback_data="upload_analysis")],
-            [InlineKeyboardButton("Compare", callback_data="compare_analyses")],
-            [InlineKeyboardButton("Recent", callback_data="recent_analyses")],
-            [InlineKeyboardButton("Subscription", callback_data="subscription")],
-            [InlineKeyboardButton("Loyalty", callback_data="loyalty")],
-            [InlineKeyboardButton("About", callback_data="about")],
-        ]
-        if update.callback_query:
-            await update.callback_query.edit_message_text("Menu:", reply_markup=InlineKeyboardMarkup(kb))
+        active = user and SubscriptionManager.is_subscription_active(user)
+        if active:
+            kb = [
+                [InlineKeyboardButton("📤 Загрузить анализ", callback_data="upload_analysis")],
+                [InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")],
+                [InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")],
+                [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
+                [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
+                [InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
+            ]
         else:
-            await update.message.reply_text("Menu:", reply_markup=InlineKeyboardMarkup(kb))
+            kb = [
+                [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
+                [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
+                [InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
+            ]
+        msg = "Выберите действие:"
+        if update.callback_query:
+            await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
     async def _subscription_status(self, update: Update):
         user = self._user(update.effective_user.id)
         if user and SubscriptionManager.is_subscription_active(user):
             exp = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "—"
             av, tot, bon, _ = SubscriptionManager.get_available_requests(user)
-            text = f"Active until {exp}. Requests: {av} (incl. +{bon} bonus)."
-            kb = [[InlineKeyboardButton("Renew", callback_data="subscription_plans")], [InlineKeyboardButton("Back", callback_data="back_menu")]]
+            text = (
+                "Статус подписки\n\n"
+                f"Активна до: {exp}\n"
+                f"Доступно запросов: {av} из {tot}\n"
+                f"Бонусные запросы: +{bon}"
+            )
+            kb = [
+                [InlineKeyboardButton("Продлить подписку", callback_data="subscription_plans")],
+                [InlineKeyboardButton("⬅ Назад", callback_data="back_menu")],
+            ]
         else:
-            text = MSG_NEED_SUB
-            kb = [[InlineKeyboardButton("Subscribe", callback_data="subscription_plans")], [InlineKeyboardButton("Back", callback_data="back_menu")]]
+            text = "Для доступа к анализам нужна активная подписка."
+            kb = [
+                [InlineKeyboardButton("Оформить подписку", callback_data="subscription_plans")],
+                [InlineKeyboardButton("⬅ Назад", callback_data="back_menu")],
+            ]
         await self._reply(update, text, kb)
 
     async def _subscription_plans(self, update: Update):
         kb = [
-            [InlineKeyboardButton("1 mo — 299 ₽", callback_data="plan_1month")],
-            [InlineKeyboardButton("3 mo — 799 ₽", callback_data="plan_3months")],
-            [InlineKeyboardButton("6 mo — 1399 ₽", callback_data="plan_6months")],
-            [InlineKeyboardButton("12 mo — 2499 ₽", callback_data="plan_12months")],
-            [InlineKeyboardButton("Back", callback_data="subscription")],
+            [InlineKeyboardButton("1 мес — 299 ₽", callback_data="plan_1month")],
+            [InlineKeyboardButton("3 мес — 799 ₽", callback_data="plan_3months")],
+            [InlineKeyboardButton("6 мес — 1399 ₽", callback_data="plan_6months")],
+            [InlineKeyboardButton("12 мес — 2499 ₽", callback_data="plan_12months")],
+            [InlineKeyboardButton("⬅ Назад", callback_data="subscription")],
         ]
-        await update.callback_query.edit_message_text("Plan:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.callback_query.edit_message_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(kb))
 
     async def _loyalty(self, update: Update):
-        text = "Referral: +5 requests per paid referral. Valid while subscription active."
-        kb = [[InlineKeyboardButton("Get link", callback_data="get_referral_link")], [InlineKeyboardButton("Stats", callback_data="referral_stats")], [InlineKeyboardButton("Back", callback_data="back_menu")]]
+        text = (
+            "Программа лояльности Pulse\n\n"
+            "Если пользователь оформит подписку по вашей персональной ссылке, "
+            "вам начисляется 5 дополнительных запросов за каждую оплату.\n\n"
+            "Бонус действует в рамках активной подписки."
+        )
+        kb = [
+            [InlineKeyboardButton("🔗 Получить персональную ссылку", callback_data="get_referral_link")],
+            [InlineKeyboardButton("📊 Статистика начислений", callback_data="referral_stats")],
+            [InlineKeyboardButton("⬅ Назад", callback_data="back_menu")],
+        ]
         await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
     async def _referral_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,23 +208,24 @@ class BotHandlers:
             self.db.commit()
         bot = await context.bot.get_me()
         link = f"https://t.me/{bot.username}?start={user.referral_code}"
-        await self._reply(update, f"Link:\n{link}", [[InlineKeyboardButton("Back", callback_data="loyalty")]])
+        await self._reply(update, f"Ваша ссылка:\n{link}", [[InlineKeyboardButton("⬅ Назад", callback_data="loyalty")]])
 
     async def _referral_stats(self, update: Update):
         user = await self._ensure_user(update)
         if not user:
             return
         s = SubscriptionManager.get_referral_stats(self.db, user.id)
-        await self._reply(update, f"Referrals: {s['total_referrals']}. Bonus requests: {s['total_bonus']}.", [[InlineKeyboardButton("Back", callback_data="loyalty")]])
+        text = f"Рефералов: {s['total_referrals']}. Бонусных запросов: {s['total_bonus']}."
+        await self._reply(update, text, [[InlineKeyboardButton("⬅ Назад", callback_data="loyalty")]])
 
     async def _upload_request(self, update: Update):
         user = await self._ensure_user(update)
         if not user:
             return
         if not SubscriptionManager.can_perform_analysis(self.db, user.id):
-            await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("Subscription", callback_data="subscription")]])
+            await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
             return
-        await update.callback_query.edit_message_text("Send PDF, JPG or PNG.")
+        await update.callback_query.edit_message_text("Отправьте файл: PDF, JPG или PNG.")
         FSMStorage.set_state(update.effective_user.id, States.PROCESSING_FILE)
 
     async def handle_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -308,12 +342,15 @@ class BotHandlers:
                 SubscriptionManager.use_request(self.db, user.id)
                 from cleanup import cleanup_user_analyses
                 cleanup_user_analyses(user.id, keep_count=3)
-                await update.message.reply_text(f"Report:\n\n{report}")
+                await update.message.reply_text(f"Отчёт:\n\n{report}")
                 kb = [
-                    [InlineKeyboardButton("Compare", callback_data=f"compare_from_{sid}"), InlineKeyboardButton("Clarify", callback_data=f"follow_up_{sid}")],
-                    [InlineKeyboardButton("Menu", callback_data="back_menu")],
+                    [
+                        InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{sid}"),
+                        InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{sid}"),
+                    ],
+                    [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
                 ]
-                await update.message.reply_text("Next:", reply_markup=InlineKeyboardMarkup(kb))
+                await update.message.reply_text("Выберите действие:", reply_markup=InlineKeyboardMarkup(kb))
                 fsm["current_session_id"] = sid
                 fsm["follow_up_count"] = 0
                 FSMStorage.set_data(uid, fsm)
@@ -351,7 +388,12 @@ class BotHandlers:
                     await self._main_menu(update)
                     FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
                 else:
-                    await update.message.reply_text(f"Up to {2 - n - 1} more.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Clarify", callback_data=f"follow_up_{sid}")], [InlineKeyboardButton("Menu", callback_data="back_menu")]]))
+                    left = 2 - n - 1
+                    kb = [
+                        [InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{sid}")],
+                        [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
+                    ]
+                    await update.message.reply_text(f"Можно задать ещё вопросов: {left}.", reply_markup=InlineKeyboardMarkup(kb))
             except Exception as e:
                 logger.error(f"Follow-up: {e}")
                 await update.message.reply_text(MSG_ERR)
@@ -402,16 +444,16 @@ class BotHandlers:
             return
         sessions = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if not sessions:
-            await self._reply(update, "No analyses.", [[InlineKeyboardButton("Back", callback_data="back_menu")]])
+            await self._reply(update, "Нет сохранённых анализов.", [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
             return
         lines = []
         kb = []
         for s in sessions:
             d = s.created_at.strftime("%Y-%m-%d %H:%M")
             lines.append(d)
-            kb.append([InlineKeyboardButton(f"View {d}", callback_data=f"analysis_{s.id}")])
-        kb.append([InlineKeyboardButton("Back", callback_data="back_menu")])
-        await self._reply(update, "Recent:\n" + "\n".join(lines), kb)
+            kb.append([InlineKeyboardButton(d, callback_data=f"analysis_{s.id}")])
+        kb.append([InlineKeyboardButton("⬅ Назад", callback_data="back_menu")])
+        await self._reply(update, "Последние анализы (выберите — покажу краткое содержание):\n\n" + "\n".join(lines), kb)
 
     async def _analysis_detail(self, update: Update, session_id: int):
         user = await self._ensure_user(update)
@@ -426,13 +468,17 @@ class BotHandlers:
             return
         res = self.db.query(StructuredResult).filter(StructuredResult.session_id == session_id).first()
         if not res or not res.report:
-            await self._reply(update, "Not found.")
+            await self._reply(update, "Анализ не найден.")
             return
+        summary = (res.report[:500] + "…") if len(res.report) > 500 else res.report
         kb = [
-            [InlineKeyboardButton("Compare", callback_data=f"compare_from_{session_id}"), InlineKeyboardButton("Clarify", callback_data=f"follow_up_{session_id}")],
-            [InlineKeyboardButton("Back", callback_data="recent_analyses")],
+            [
+                InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
+                InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
+            ],
+            [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
         ]
-        await self._reply(update, res.report, kb)
+        await self._reply(update, f"Кратко:\n\n{summary}", kb)
 
     async def _compare_request(self, update: Update):
         user = await self._ensure_user(update)
@@ -443,15 +489,15 @@ class BotHandlers:
             return
         sessions = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if len(sessions) < 2:
-            await self._reply(update, "Need at least 2 analyses.", [[InlineKeyboardButton("Back", callback_data="back_menu")]])
+            await self._reply(update, "Нужно минимум 2 анализа для сравнения.", [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
             return
         kb = []
         for i in range(min(2, len(sessions))):
             for j in range(i + 1, min(3, len(sessions))):
                 a, b = sessions[i], sessions[j]
-                kb.append([InlineKeyboardButton(f"{a.created_at.strftime('%Y-%m-%d')} vs {b.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{a.id}_{b.id}")])
-        kb.append([InlineKeyboardButton("Back", callback_data="back_menu")])
-        await self._reply(update, "Choose pair:", kb)
+                kb.append([InlineKeyboardButton(f"{a.created_at.strftime('%Y-%m-%d')} и {b.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{a.id}_{b.id}")])
+        kb.append([InlineKeyboardButton("⬅ Назад", callback_data="back_menu")])
+        await self._reply(update, "Выберите два анализа для сравнения:", kb)
 
     async def _compare_from(self, update: Update, session_id: int):
         user = await self._ensure_user(update)
@@ -466,11 +512,11 @@ class BotHandlers:
             return
         others = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id, AnalysisSession.id != session_id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if not others:
-            await self._reply(update, "Need another analysis.", [[InlineKeyboardButton("Back", callback_data=f"analysis_{session_id}")]])
+            await self._reply(update, "Нужен ещё один анализ для сравнения.", [[InlineKeyboardButton("⬅ Назад", callback_data=f"analysis_{session_id}")]])
             return
-        kb = [[InlineKeyboardButton(f"vs {s.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{session_id}_{s.id}")] for s in others]
-        kb.append([InlineKeyboardButton("Back", callback_data=f"analysis_{session_id}")])
-        await self._reply(update, "Compare with:", kb)
+        kb = [[InlineKeyboardButton(f"📊 с {s.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{session_id}_{s.id}")] for s in others]
+        kb.append([InlineKeyboardButton("⬅ Назад", callback_data=f"analysis_{session_id}")])
+        await self._reply(update, "Сравнить с:", kb)
 
     async def _do_compare(self, update: Update, context: ContextTypes.DEFAULT_TYPE, session_ids: list):
         user = await self._ensure_user(update)
@@ -500,7 +546,7 @@ class BotHandlers:
             c2 = dict(r2.clinical_context or {})
             c2["date"] = s2.created_at.strftime("%Y-%m-%d")
             report = self.llm_service.compare_analyses(r1.structured_json, r2.structured_json, c1, c2)
-            await self._reply(update, report, [[InlineKeyboardButton("Back", callback_data="back_menu")]])
+            await self._reply(update, report, [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
         except Exception as e:
             logger.error(f"Compare: {e}")
             await self._reply(update, MSG_ERR)
