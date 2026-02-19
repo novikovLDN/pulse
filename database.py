@@ -145,9 +145,47 @@ class Referral(Base):
     payment = relationship("Payment", back_populates="referral", foreign_keys=[payment_id])
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    from sqlalchemy import text
+    r = conn.execute(text("""
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = :t AND column_name = :c
+    """), {"t": table, "c": column})
+    return r.fetchone() is not None
+
+
+def _migrate_add_columns(conn):
+    """Add new columns/tables for existing deployments (no Alembic)."""
+    from sqlalchemy import text
+    for col, sql in [
+        ("total_requests", "ALTER TABLE users ADD COLUMN total_requests INTEGER DEFAULT 0"),
+        ("bonus_requests", "ALTER TABLE users ADD COLUMN bonus_requests INTEGER DEFAULT 0"),
+        ("used_requests", "ALTER TABLE users ADD COLUMN used_requests INTEGER DEFAULT 0"),
+        ("referrer_id", "ALTER TABLE users ADD COLUMN referrer_id INTEGER REFERENCES users(id)"),
+        ("referral_code", "ALTER TABLE users ADD COLUMN referral_code VARCHAR UNIQUE"),
+    ]:
+        if not _column_exists(conn, "users", col):
+            conn.execute(text(sql))
+    if not _column_exists(conn, "payments", "payment_date"):
+        conn.execute(text("ALTER TABLE payments ADD COLUMN payment_date TIMESTAMP"))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS referrals (
+            id SERIAL PRIMARY KEY,
+            referrer_id INTEGER NOT NULL REFERENCES users(id),
+            referred_user_id INTEGER NOT NULL REFERENCES users(id),
+            payment_id INTEGER NOT NULL REFERENCES payments(id),
+            bonus_requests INTEGER DEFAULT 5,
+            payment_date TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+
 def init_db():
-    """Initialize database tables."""
+    """Initialize database tables and run migration for new columns."""
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        _migrate_add_columns(conn)
 
 
 def get_db():
