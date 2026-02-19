@@ -167,13 +167,16 @@ def main():
     # Test database connection
     try:
         logger.info("🔄 Testing database connection...")
+        from sqlalchemy import text
         db = get_db_session()
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db.close()
         logger.info("✅ Database connection successful")
     except Exception as e:
         logger.error(f"❌ Database connection failed: {e}")
         logger.error("Please check DATABASE_URL and ensure database is accessible")
+        import traceback
+        logger.error(traceback.format_exc())
         sys.exit(1)
     
     try:
