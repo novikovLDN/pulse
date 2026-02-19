@@ -74,7 +74,7 @@ ADMIN_SECRET_KEY=your_secure_admin_key
 # App Settings
 ENVIRONMENT=production
 LOG_LEVEL=INFO
-PORT=8000
+PORT=8080
 ```
 
 **Важно:** 

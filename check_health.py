@@ -7,7 +7,7 @@ from config import settings
 def check_health():
     """Check health endpoint."""
     # Get URL from environment or use default
-    base_url = os.getenv("RAILWAY_PUBLIC_DOMAIN") or settings.telegram_webhook_url or "http://localhost:8000"
+    base_url = os.getenv("RAILWAY_PUBLIC_DOMAIN") or settings.telegram_webhook_url or "http://localhost:8080"
     
     # Remove /telegram-webhook if present
     if base_url.endswith("/telegram-webhook"):

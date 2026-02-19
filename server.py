@@ -43,7 +43,7 @@ async def health():
     bot_initialized = hasattr(app.state, 'bot_application') and app.state.bot_application is not None
     
     return {
-        "status": "ok",
+        "status": "OK",
         "service": "Pulse Bot",
         "bot_initialized": bot_initialized
     }
@@ -94,7 +94,7 @@ def setup_bot_application(bot_app: Application):
     app.state.bot_application = bot_app
 
 
-def run_server(bot_app: Application, host: str = "0.0.0.0", port: int = 8000):
+def run_server(bot_app: Application, host: str = "0.0.0.0", port: int = 8080):
     """Run unified server."""
     setup_bot_application(bot_app)
     

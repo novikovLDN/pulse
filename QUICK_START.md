@@ -44,7 +44,7 @@ REDIS_URL=${{Redis.REDIS_URL}}
 # Настройки
 ENVIRONMENT=production
 LOG_LEVEL=INFO
-PORT=8000
+PORT=8080
 ```
 
 **Важно:** После деплоя скопируйте публичный URL и добавьте:
