@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     database_url: str
     
     # Redis
+    redis_url: Optional[str] = None  # Full Redis URL (for Railway)
     redis_host: str = "redis"
     redis_port: int = 6379
     redis_db: int = 0

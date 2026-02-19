@@ -4,12 +4,19 @@ import json
 from typing import Optional, Dict, Any
 from config import settings
 
-redis_client = redis.Redis(
-    host=settings.redis_host,
-    port=settings.redis_port,
-    db=settings.redis_db,
-    decode_responses=True
-)
+# Use Redis URL if provided (Railway), otherwise use host/port
+if settings.redis_url:
+    redis_client = redis.from_url(
+        settings.redis_url,
+        decode_responses=True
+    )
+else:
+    redis_client = redis.Redis(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        db=settings.redis_db,
+        decode_responses=True
+    )
 
 
 class FSMStorage:
