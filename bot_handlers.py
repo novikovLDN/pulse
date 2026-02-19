@@ -32,6 +32,12 @@ from file_processor import FileProcessor
 from llm_service import LLMService
 from redis_client import FSMStorage
 from loguru import logger
+import asyncio
+
+try:
+    from faq_analyses import search_faq
+except Exception:
+    search_faq = None
 
 ADMIN_ID = 565638442
 
@@ -195,6 +201,12 @@ class T:
     ADMIN_GRANT_3_BTN = "✅ Выдать 3 мес"
     ADMIN_REMOVE_BTN = "🚫 Убрать подписку"
 
+    # Спросить Pulse (поиск по базе FAQ)
+    ASK_PULSE_BTN = "💬 Спросить Pulse"
+    ASK_PULSE_PROMPT = "Введите ваш вопрос по анализам (например: повышенный ТТГ, норма гемоглобина у женщин, что значит креатинин)."
+    ASK_PULSE_SEARCHING = "Ищем ответ в базе…"
+    ASK_PULSE_NOT_FOUND = "По вашему запросу подходящего ответа не найдено. Попробуйте переформулировать вопрос или использовать другие ключевые слова (название показателя, «норма», «повышен», «понижен»)."
+
 # States
 class States:
     START, TERMS_ACCEPTED = "start", "terms_accepted"
@@ -202,6 +214,7 @@ class States:
     COLLECTING_PREGNANCY, COLLECTING_CHRONIC, COLLECTING_MEDICATIONS = "collecting_pregnancy", "collecting_chronic", "collecting_medications"
     PROCESSING_FILE, WAITING_FOLLOW_UP = "processing_file", "waiting_follow_up"
     ADMIN_WAIT_ID, ADMIN_WAIT_USERNAME = "admin_wait_id", "admin_wait_username"
+    ASK_PULSE_WAITING = "ask_pulse_waiting"
 
 MSG_NEED_START = T.NEED_START
 MSG_NEED_SUB = T.NEED_SUB
@@ -363,7 +376,11 @@ class BotHandlers:
                 return
 
         if data == "terms":
-            await q.edit_message_text(f"{T.TERMS_TITLE}\n\n{T.TERMS_FULL}")
+            kb = [[InlineKeyboardButton(T.BACK, callback_data="terms_back")]]
+            await q.edit_message_text(f"{T.TERMS_TITLE}\n\n{T.TERMS_FULL}", reply_markup=InlineKeyboardMarkup(kb))
+        elif data == "terms_back":
+            kb = [[InlineKeyboardButton(T.TERMS_BTN, callback_data="terms")], [InlineKeyboardButton(T.ACCEPT_BTN, callback_data="accept_terms")]]
+            await q.edit_message_text(T.WELCOME, reply_markup=InlineKeyboardMarkup(kb))
         elif data == "accept_terms":
             FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
             await self._main_menu(update)
@@ -376,6 +393,8 @@ class BotHandlers:
             await self._how_to_use(update)
         elif data == "help":
             await self._help(update)
+        elif data == "ask_pulse":
+            await self._ask_pulse_request(update)
         elif data == "subscription":
             await self._subscription_status(update)
         elif data == "subscription_plans":
@@ -414,6 +433,7 @@ class BotHandlers:
         if active:
             kb = [
                 [InlineKeyboardButton("📤 Загрузить анализ", callback_data="upload_analysis")],
+                [InlineKeyboardButton("💬 Спросить Pulse", callback_data="ask_pulse")],
                 [InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")],
                 [InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")],
                 [InlineKeyboardButton("❓ Как пользоваться", callback_data="how_to_use")],
@@ -509,6 +529,44 @@ class BotHandlers:
         text = f"{T.HELP_TITLE}\n\n{T.HELP_BODY}"
         await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
 
+    async def _ask_pulse_request(self, update: Update):
+        user = await self._ensure_user(update)
+        if not user:
+            return
+        if not SubscriptionManager.is_subscription_active(user):
+            await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
+            return
+        FSMStorage.set_state(update.effective_user.id, States.ASK_PULSE_WAITING)
+        await self._reply(update, T.ASK_PULSE_PROMPT, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
+
+    async def _ask_pulse_handle(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
+        """Прогресс-бар (галочки) и поиск в FAQ по ключевым словам."""
+        uid = update.effective_user.id
+        chat_id = update.effective_chat.id
+        steps = 5
+        msg = await update.message.reply_text(f"{T.ASK_PULSE_SEARCHING} {'⬜' * steps}")
+        for i in range(1, steps + 1):
+            await asyncio.sleep(0.35)
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg.message_id,
+                    text=f"{T.ASK_PULSE_SEARCHING} {'✅' * i}{'⬜' * (steps - i)}",
+                )
+            except Exception:
+                pass
+        if not search_faq:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=T.SERVICE_UNAVAILABLE)
+            FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+            return
+        results = search_faq(query, top_k=1)
+        if not results:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=T.ASK_PULSE_NOT_FOUND)
+        else:
+            _, answer, _ = results[0]
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"Ответ:\n\n{answer}")
+        FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+
     async def _upload_request(self, update: Update):
         user = await self._ensure_user(update)
         if not user:
@@ -601,6 +659,13 @@ class BotHandlers:
                 await self._admin_user_card(update, user)
             else:
                 await update.message.reply_text(T.ADMIN_USER_NOT_FOUND)
+            return
+
+        if state == States.ASK_PULSE_WAITING:
+            if not text:
+                await update.message.reply_text(T.ASK_PULSE_PROMPT)
+                return
+            await self._ask_pulse_handle(update, context, text)
             return
 
         if state == States.COLLECTING_AGE:
