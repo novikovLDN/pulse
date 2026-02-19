@@ -7,13 +7,22 @@ from config import settings
 
 Base = declarative_base()
 
-# Create engine with connection pooling and error handling
+# Create engine with connection pooling and error handling for PostgreSQL
 try:
+    # Ensure PostgreSQL URL format
+    db_url = settings.database_url
+    if not db_url.startswith(('postgresql://', 'postgresql+psycopg2://')):
+        # Try to fix common URL format issues
+        if db_url.startswith('postgres://'):
+            db_url = db_url.replace('postgres://', 'postgresql://', 1)
+    
     engine = create_engine(
-        settings.database_url,
+        db_url,
         echo=False,
         pool_pre_ping=True,  # Verify connections before using
         pool_recycle=3600,   # Recycle connections after 1 hour
+        pool_size=5,         # Connection pool size
+        max_overflow=10,     # Max overflow connections
         connect_args={
             "connect_timeout": 10,
             "options": "-c statement_timeout=30000"
@@ -22,7 +31,8 @@ try:
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 except Exception as e:
     from loguru import logger
-    logger.error(f"❌ Failed to create database engine: {e}")
+    logger.error(f"❌ Failed to create PostgreSQL database engine: {e}")
+    logger.error(f"Database URL format: {settings.database_url[:20]}...")
     raise
 
 
