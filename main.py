@@ -43,7 +43,7 @@ class PulseBot:
         logger.error(f"Handler error: {context.error}")
         if update and update.effective_message:
             try:
-                await update.effective_message.reply_text("Error. Try again.")
+                await update.effective_message.reply_text("Произошла ошибка. Повторите попытку позже.")
             except Exception:
                 pass
 
