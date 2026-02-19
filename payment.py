@@ -1,175 +1,68 @@
-"""YooKassa payment integration."""
+"""YooKassa payments."""
 import uuid
-from yookassa import Configuration, Payment
 from datetime import datetime
+from yookassa import Configuration, Payment
 from sqlalchemy.orm import Session
-from database import User, Payment as PaymentModel
+from database import Payment as PaymentModel
 from subscription import SubscriptionManager
 from config import settings
 from loguru import logger
 
-
-# Configure YooKassa
 if settings.yookassa_shop_id and settings.yookassa_secret_key:
     Configuration.account_id = settings.yookassa_shop_id
     Configuration.secret_key = settings.yookassa_secret_key
-else:
-    logger.warning("⚠️ YooKassa credentials not configured")
 
 
 class PaymentService:
-    """Handle payment processing."""
-    
     @staticmethod
     def create_payment(user_id: int, plan: str, db: Session) -> dict:
-        """Create payment in YooKassa."""
         if not settings.yookassa_shop_id or not settings.yookassa_secret_key:
-            logger.error("YooKassa credentials not configured")
-            raise ValueError("YooKassa payment service is not available. Please contact support.")
-        
+            raise ValueError("Payments not configured")
         if plan not in SubscriptionManager.PLANS:
             raise ValueError(f"Invalid plan: {plan}")
-        
-        plan_data = SubscriptionManager.PLANS[plan]
-        amount = plan_data["price"]
-        
-        # Create payment record in database
-        payment_record = PaymentModel(
-            user_id=user_id,
-            amount=amount,
-            tariff=plan,
-            status="pending"
-        )
-        db.add(payment_record)
+        amount = SubscriptionManager.PLANS[plan]["price"]
+        rec = PaymentModel(user_id=user_id, amount=amount, tariff=plan, status="pending")
+        db.add(rec)
         db.commit()
-        db.refresh(payment_record)
-        
+        db.refresh(rec)
         try:
-            # Create payment in YooKassa
-            payment_id = str(uuid.uuid4())
-            payment = Payment.create({
-                "amount": {
-                    "value": f"{amount:.2f}",
-                    "currency": "RUB"
-                },
-                "confirmation": {
-                    "type": "redirect",
-                    "return_url": settings.yookassa_return_url or "https://t.me/your_bot"
-                },
+            pay = Payment.create({
+                "amount": {"value": f"{amount:.2f}", "currency": "RUB"},
+                "confirmation": {"type": "redirect", "return_url": settings.yookassa_return_url or "https://t.me"},
                 "capture": True,
-                "description": f"Subscription: {plan}",
-                "metadata": {
-                    "user_id": str(user_id),
-                    "payment_record_id": str(payment_record.id),
-                    "plan": plan
-                }
-            }, payment_id)
-            
-            # Update payment record with YooKassa payment ID
-            payment_record.yookassa_payment_id = payment.id
+                "description": plan,
+                "metadata": {"user_id": str(user_id), "plan": plan},
+            }, str(uuid.uuid4()))
+            rec.yookassa_payment_id = pay.id
             db.commit()
-            
-            confirmation_url = None
-            if hasattr(payment, 'confirmation') and payment.confirmation:
-                if hasattr(payment.confirmation, 'confirmation_url'):
-                    confirmation_url = payment.confirmation.confirmation_url
-            
-            return {
-                "payment_id": payment.id,
-                "confirmation_url": confirmation_url,
-                "payment_record_id": payment_record.id
-            }
+            url = getattr(getattr(pay, "confirmation", None), "confirmation_url", None)
+            return {"payment_id": pay.id, "confirmation_url": url, "payment_record_id": rec.id}
         except Exception as e:
-            logger.error(f"Error creating YooKassa payment: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            # Mark payment as failed
-            payment_record.status = "failed"
+            logger.error(f"YooKassa create: {e}")
+            rec.status = "failed"
             db.commit()
             raise
-    
+
     @staticmethod
-    def handle_webhook(notification_data: dict, db: Session) -> bool:
-        """Handle YooKassa webhook notification."""
+    def handle_webhook(data: dict, db: Session) -> bool:
         try:
-            # YooKassa v3.x sends webhook as JSON with 'event' and 'object' fields
-            # Parse notification data directly without PaymentNotification class
-            event_type = notification_data.get("event")
-            payment_data = notification_data.get("object", {})
-            
-            if not payment_data:
-                logger.error("Invalid webhook data: missing 'object' field")
+            obj = data.get("object") or {}
+            pid, status = obj.get("id"), obj.get("status")
+            if not pid:
                 return False
-            
-            payment_id = payment_data.get("id")
-            payment_status = payment_data.get("status")
-            
-            if not payment_id:
-                logger.error("Invalid webhook data: missing payment ID")
+            rec = db.query(PaymentModel).filter(PaymentModel.yookassa_payment_id == pid).first()
+            if not rec:
                 return False
-            
-            # Find payment record
-            payment_record = db.query(PaymentModel).filter(
-                PaymentModel.yookassa_payment_id == payment_id
-            ).first()
-            
-            if not payment_record:
-                logger.warning(f"Payment record not found for YooKassa payment: {payment_id}")
-                return False
-            
-            # Update payment status based on event type and payment status
-            if event_type == "payment.succeeded" or payment_status == "succeeded":
-                payment_record.status = "completed"
-                payment_record.completed_at = datetime.utcnow()
-                payment_record.payment_date = datetime.utcnow()
-                
-                # Activate subscription
-                SubscriptionManager.activate_subscription(
-                    db,
-                    payment_record.user_id,
-                    payment_record.tariff
-                )
-                
-                # Process referral bonus if user was referred
-                SubscriptionManager.process_referral_bonus(
-                    db,
-                    payment_record.user_id,
-                    payment_record.id
-                )
-                
+            if data.get("event") == "payment.succeeded" or status == "succeeded":
+                rec.status = "completed"
+                rec.completed_at = rec.payment_date = datetime.utcnow()
+                SubscriptionManager.activate_subscription(db, rec.user_id, rec.tariff)
+                SubscriptionManager.process_referral_bonus(db, rec.user_id, rec.id)
                 db.commit()
-                logger.info(f"Payment completed: {payment_id}, User: {payment_record.user_id}")
-                return True
-            elif event_type == "payment.canceled" or payment_status == "canceled":
-                payment_record.status = "failed"
+            elif data.get("event") == "payment.canceled" or status == "canceled":
+                rec.status = "failed"
                 db.commit()
-                logger.info(f"Payment canceled: {payment_id}")
-                return True
-            
-            logger.info(f"Payment status updated: {payment_id}, Status: {payment_status}, Event: {event_type}")
             return True
         except Exception as e:
-            logger.error(f"Error handling payment webhook: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Webhook: {e}")
             return False
-    
-    @staticmethod
-    def check_payment_status(payment_record_id: int, db: Session) -> str:
-        """Check payment status."""
-        payment_record = db.query(PaymentModel).filter(
-            PaymentModel.id == payment_record_id
-        ).first()
-        
-        if not payment_record:
-            return "not_found"
-        
-        if payment_record.yookassa_payment_id:
-            try:
-                payment = Payment.find_one(payment_record.yookassa_payment_id)
-                return payment.status
-            except Exception as e:
-                logger.error(f"Error checking payment status: {e}")
-                return payment_record.status
-        
-        return payment_record.status
