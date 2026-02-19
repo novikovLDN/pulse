@@ -84,33 +84,53 @@ async def health():
         }
 
 
+# Текст уведомления рефереру (LOYALTY_NOTIFICATION) — без импорта bot_handlers
+LOYALTY_NOTIFICATION_TEXT = (
+    "Начисление по программе лояльности\n\n"
+    "Пользователь, зарегистрированный по вашей ссылке, оформил подписку.\n\n"
+    "Вам начислено 5 дополнительных запросов."
+)
+
+
 @app.post("/webhook/yookassa")
 async def yookassa_webhook(request: Request):
-    """Handle YooKassa webhook."""
+    """Handle YooKassa webhook. Sends loyalty notification to referrer when applicable."""
     try:
         data = await request.json()
         logger.info(f"Received YooKassa webhook: {json.dumps(data)}")
         
         try:
             db = next(get_db())
-            success = PaymentService.handle_webhook(data, db)
+            result = PaymentService.handle_webhook(data, db)
             
-            if success:
-                return {"status": "ok"}
-            else:
+            if not result.get("success"):
                 return {"status": "error", "message": "Failed to process webhook"}
+            referrer_tg_id = result.get("referrer_telegram_id")
+            if referrer_tg_id and getattr(app.state, "bot_application", None):
+                try:
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                    bot = app.state.bot_application.bot
+                    me = await bot.get_me()
+                    url = f"https://t.me/{me.username}" if me and me.username else None
+                    kb = [[InlineKeyboardButton("📊 Перейти в раздел подписки", url=url)]] if url else None
+                    await bot.send_message(
+                        chat_id=referrer_tg_id,
+                        text=LOYALTY_NOTIFICATION_TEXT,
+                        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"Loyalty notification send: {notify_err}")
+            return {"status": "ok"}
         except Exception as db_error:
             logger.error(f"Database error processing webhook: {db_error}")
             import traceback
             logger.error(traceback.format_exc())
-            # Still return 200 to prevent YooKassa from retrying
             return {"status": "error", "message": "Internal error"}
     
     except Exception as e:
         logger.error(f"Error processing YooKassa webhook: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        # Return 200 to prevent YooKassa from retrying
         return {"status": "error", "message": str(e)}
 
 

@@ -68,18 +68,25 @@ class T:
     SUB_GET_BTN = "✅ Оформить подписку"
     SUB_PLANS_TITLE = "Тарифы"
 
-    # Лояльность
+    # Лояльность (reward_per_payment=5, unlimited_referrals, applies_for_each_payment, requires_active_subscription, expire_with_subscription)
     LOYALTY_TITLE = "Программа лояльности Pulse"
     LOYALTY_RULES = (
-        "По персональной ссылке при оплате подписки приглашённым пользователем вам начисляется 5 дополнительных запросов за каждую оплату. "
-        "Бонусы действуют только при активной подписке и не переносятся на следующий период."
+        "За каждую успешную оплату по вашей персональной ссылке начисляется 5 дополнительных запросов.\n\n"
+        "Начисления действуют при активной подписке."
     )
     LOYALTY_GET_LINK_BTN = "🔗 Получить персональную ссылку"
     LOYALTY_STATS_BTN = "📊 Статистика начислений"
     REFERRAL_LINK_TITLE = "Ваша персональная ссылка:"
-    REFERRAL_STATS_TITLE = "Статистика начислений"
-    REFERRAL_COUNT = "Приглашённых пользователей:"
-    REFERRAL_BONUS = "Начислено бонусных запросов:"
+    REFERRAL_STATS_TITLE = "Статистика по программе лояльности"
+    REFERRAL_AVAILABLE = "Доступно (бонусных):"
+    REFERRAL_USED = "Использовано:"
+    REFERRAL_REMAINING = "Осталось:"
+    LOYALTY_NOTIFICATION_TITLE = "Начисление по программе лояльности"
+    LOYALTY_NOTIFICATION_BODY = (
+        "Пользователь, зарегистрированный по вашей ссылке, оформил подписку.\n\n"
+        "Вам начислено 5 дополнительных запросов."
+    )
+    LOYALTY_NOTIFICATION_BTN = "📊 Перейти в раздел подписки"
 
     # О сервисе
     ABOUT_TITLE = "О сервисе"
@@ -440,8 +447,13 @@ class BotHandlers:
         user = await self._ensure_user(update)
         if not user:
             return
-        s = SubscriptionManager.get_referral_stats(self.db, user.id)
-        text = f"{T.REFERRAL_STATS_TITLE}\n\n{T.REFERRAL_COUNT} {s['total_referrals']}\n{T.REFERRAL_BONUS} {s['total_bonus']}"
+        remaining, _, bonus, used = SubscriptionManager.get_available_requests(user)
+        text = (
+            f"{T.REFERRAL_STATS_TITLE}\n\n"
+            f"{T.REFERRAL_AVAILABLE} {bonus}\n"
+            f"{T.REFERRAL_USED} {used}\n"
+            f"{T.REFERRAL_REMAINING} {remaining}"
+        )
         await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="loyalty")]])
 
     async def _upload_request(self, update: Update):
