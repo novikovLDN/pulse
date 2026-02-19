@@ -87,7 +87,7 @@ class T:
     )
     SUB_RENEW_BTN = "🔄 Продлить подписку"
     SUB_GET_BTN = "✅ Оформить подписку"
-    SUB_PLANS_TITLE = "Тарифы"
+    SUB_PLANS_TITLE = "Тарифы: Базовая (только Спросить Pulse) и Премиум (всё включено)"
 
     # Лояльность (reward_per_payment=5, unlimited_referrals, applies_for_each_payment, requires_active_subscription, expire_with_subscription)
     LOYALTY_TITLE = "Программа лояльности Pulse"
@@ -199,9 +199,11 @@ class T:
     ADMIN_SUB_STATUS = "Подписка:"
     ADMIN_ACTIVE_UNTIL = "Активна до:"
     ADMIN_REQUESTS = "Запросы (тариф / бонус / использовано):"
-    ADMIN_GRANT_1_BTN = "✅ Выдать 1 мес"
-    ADMIN_GRANT_3_BTN = "✅ Выдать 3 мес"
-    ADMIN_REMOVE_BTN = "🚫 Убрать подписку"
+    ADMIN_GRANT_BASIC_1 = "📌 Базовая 1 мес"
+    ADMIN_GRANT_BASIC_3 = "📌 Базовая 3 мес"
+    ADMIN_GRANT_PREMIUM_1 = "⭐ Премиум 1 мес"
+    ADMIN_GRANT_PREMIUM_3 = "⭐ Премиум 3 мес"
+    ADMIN_REMOVE_BTN = "🗑 Убрать подписку"
 
     # Спросить Pulse (поиск по базе FAQ)
     ASK_PULSE_BTN = "💬 Спросить Pulse"
@@ -220,8 +222,8 @@ class T:
     NOTIFICATIONS_DESC = "Создайте напоминание на нужную дату и время — бот пришлёт вам ваше сообщение."
     NOTIFICATION_CREATE_BTN = "➕ Создать уведомление"
     NOTIFICATION_MY_BTN = "📋 Мои уведомления"
-    NOTIFICATION_DATE_PROMPT = "Введите дату в формате ДД.ММ.ГГГГ (например 25.12.2025):"
-    NOTIFICATION_TIME_PROMPT = "Введите время в формате ЧЧ:ММ (по московскому времени, например 14:30):"
+    NOTIFICATION_DATE_PROMPT = "Введите дату в любом формате (например 25.12.2025, 25022025, 25 02 2025):"
+    NOTIFICATION_TIME_PROMPT = "Введите время по Москве в любом формате (например 14:30, 14 30, в 5, в 17 40):"
     NOTIFICATION_TEXT_PROMPT = "Введите текст уведомления — это сообщение придёт вам в выбранные день и время:"
     NOTIFICATION_CONFIRM = "Подтвердить"
     NOTIFICATION_CANCEL = "Отмена"
@@ -234,6 +236,15 @@ class T:
     NOTIFICATION_LIST_EMPTY = "У вас пока нет запланированных уведомлений."
     NOTIFICATION_LIST_HEADER = "Ваши запланированные уведомления:"
     NOTIFICATION_DELETE_BTN = "🗑 Удалить"
+    # Мой профиль
+    PROFILE_TITLE = "👤 Мой профиль"
+    PROFILE_PLAN_BASIC = "Базовая"
+    PROFILE_PLAN_PREMIUM = "Премиум"
+    PROFILE_ACTIVE_UNTIL = "Действует до: {}"
+    PROFILE_UPLOAD_REQUESTS = "Загрузить анализ: использовано {} из {}"
+    PROFILE_UPLOAD_NA = "Загрузить анализ: недоступно (только в Премиум)"
+    PROFILE_ASK_PULSE_REQUESTS = "Спросить Pulse: использовано {} из {}"
+    PROFILE_ASK_PULSE_UNLIMITED = "Спросить Pulse: использовано {} (без лимита)"
 
 # States
 class States:
@@ -305,20 +316,25 @@ class BotHandlers:
     async def _admin_user_card(self, update: Update, user: User):
         exp = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "—"
         uname = getattr(user, "username", None) or "—"
+        plan = getattr(user, "subscription_plan", None) or "—"
         status_emoji = "✅" if user.subscription_status == "active" else "❌" if user.subscription_status == "inactive" else "⏰"
         text = (
             f"{T.ADMIN_USER_CARD}\n\n"
             f"{T.ADMIN_ID_BOT} {user.id}\n"
             f"{T.ADMIN_TG_ID} {user.telegram_id}\n"
             f"{T.ADMIN_USERNAME} @{uname}\n"
-            f"{T.ADMIN_SUB_STATUS} {status_emoji} {user.subscription_status}\n"
+            f"{T.ADMIN_SUB_STATUS} {status_emoji} {user.subscription_status} ({plan})\n"
             f"{T.ADMIN_ACTIVE_UNTIL} {exp}\n"
             f"{T.ADMIN_REQUESTS} {user.total_requests or 0} / {user.bonus_requests or 0} / {user.used_requests or 0}"
         )
         kb = [
             [
-                InlineKeyboardButton(T.ADMIN_GRANT_1_BTN, callback_data=f"admin_grant_1m_{user.id}"),
-                InlineKeyboardButton(T.ADMIN_GRANT_3_BTN, callback_data=f"admin_grant_3m_{user.id}"),
+                InlineKeyboardButton(T.ADMIN_GRANT_BASIC_1, callback_data=f"admin_grant_1month_basic_{user.id}"),
+                InlineKeyboardButton(T.ADMIN_GRANT_BASIC_3, callback_data=f"admin_grant_3months_basic_{user.id}"),
+            ],
+            [
+                InlineKeyboardButton(T.ADMIN_GRANT_PREMIUM_1, callback_data=f"admin_grant_1month_premium_{user.id}"),
+                InlineKeyboardButton(T.ADMIN_GRANT_PREMIUM_3, callback_data=f"admin_grant_3months_premium_{user.id}"),
             ],
             [InlineKeyboardButton(T.ADMIN_REMOVE_BTN, callback_data=f"admin_remove_{user.id}")],
             [InlineKeyboardButton(T.BACK, callback_data="admin_back")],
@@ -373,28 +389,23 @@ class BotHandlers:
                 FSMStorage.set_state(uid, States.ADMIN_WAIT_USERNAME)
                 await q.edit_message_text(T.ADMIN_SEARCH_USERNAME)
                 return
-            if data.startswith("admin_grant_1m_"):
-                try:
-                    target_id = int(data.replace("admin_grant_1m_", ""))
-                    if SubscriptionManager.activate_subscription(self.db, target_id, "1month"):
-                        user = self.db.query(User).filter(User.id == target_id).first()
-                        await self._admin_user_card(update, user)
-                    else:
-                        await self._reply(update, T.ADMIN_GRANT_ERR)
-                except (ValueError, AttributeError):
-                    await self._reply(update, T.ERR_TRY_AGAIN)
-                return
-            if data.startswith("admin_grant_3m_"):
-                try:
-                    target_id = int(data.replace("admin_grant_3m_", ""))
-                    if SubscriptionManager.activate_subscription(self.db, target_id, "3months"):
-                        user = self.db.query(User).filter(User.id == target_id).first()
-                        await self._admin_user_card(update, user)
-                    else:
-                        await self._reply(update, T.ADMIN_GRANT_ERR)
-                except (ValueError, AttributeError):
-                    await self._reply(update, T.ERR_TRY_AGAIN)
-                return
+            for prefix, plan_key in [
+                ("admin_grant_1month_basic_", "1month_basic"),
+                ("admin_grant_3months_basic_", "3months_basic"),
+                ("admin_grant_1month_premium_", "1month_premium"),
+                ("admin_grant_3months_premium_", "3months_premium"),
+            ]:
+                if data.startswith(prefix):
+                    try:
+                        target_id = int(data.replace(prefix, ""))
+                        if SubscriptionManager.activate_subscription(self.db, target_id, plan_key):
+                            user = self.db.query(User).filter(User.id == target_id).first()
+                            await self._admin_user_card(update, user)
+                        else:
+                            await self._reply(update, T.ADMIN_GRANT_ERR)
+                    except (ValueError, AttributeError):
+                        await self._reply(update, T.ERR_TRY_AGAIN)
+                    return
             if data.startswith("admin_remove_"):
                 try:
                     target_id = int(data.replace("admin_remove_", ""))
@@ -457,6 +468,8 @@ class BotHandlers:
             await self._follow_up_ask(update, context)
         elif data.startswith("full_report_"):
             await self._analysis_full_report(update, int(data.replace("full_report_", "")))
+        elif data == "profile":
+            await self._profile(update)
         elif data == "notifications":
             await self._notifications_menu(update)
         elif data == "notifications_list":
@@ -475,18 +488,25 @@ class BotHandlers:
         user = self._user(uid)
         active = user and SubscriptionManager.is_subscription_active(user)
         if active:
-            kb = [
-                [InlineKeyboardButton("📤 Загрузить анализ", callback_data="upload_analysis")],
-                [InlineKeyboardButton("💬 Спросить Pulse", callback_data="ask_pulse")],
-                [InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")],
-                [InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")],
-                [InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")],
+            plan = getattr(user, "subscription_plan", None) or "basic"
+            kb = [[InlineKeyboardButton("👤 Мой профиль", callback_data="profile")]]
+            if plan == "premium":
+                kb.append([InlineKeyboardButton("📤 Загрузить анализ", callback_data="upload_analysis")])
+            kb.append([InlineKeyboardButton("💬 Спросить Pulse", callback_data="ask_pulse")])
+            if plan == "premium":
+                kb.append([InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")])
+                kb.append([InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")])
+                kb.append([InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")])
+            else:
+                kb.append([InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")])
+                kb.append([InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")])
+            kb.extend([
                 [InlineKeyboardButton("❓ Как пользоваться", callback_data="how_to_use")],
                 [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
                 [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
                 [InlineKeyboardButton("🆘 Помощь", callback_data="help")],
                 [InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
-            ]
+            ])
         else:
             kb = [
                 [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
@@ -499,6 +519,36 @@ class BotHandlers:
             await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
         else:
             await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+
+    async def _profile(self, update: Update):
+        user = await self._ensure_user(update)
+        if not user:
+            return
+        plan = getattr(user, "subscription_plan", None) or "basic"
+        plan_name = T.PROFILE_PLAN_PREMIUM if plan == "premium" else T.PROFILE_PLAN_BASIC
+        if SubscriptionManager.is_subscription_active(user):
+            exp = user.subscription_expire_at.strftime("%d.%m.%Y") if user.subscription_expire_at else "—"
+            lines = [
+                T.PROFILE_TITLE,
+                "",
+                f"Подписка: {plan_name}",
+                T.PROFILE_ACTIVE_UNTIL.format(exp),
+                "",
+            ]
+            if plan == "premium":
+                rem, tot, bonus, used_up = SubscriptionManager.get_available_requests(user)
+                lines.append(T.PROFILE_UPLOAD_REQUESTS.format(used_up, used_up + rem))
+            else:
+                lines.append(T.PROFILE_UPLOAD_NA)
+            total_ask, used_ask = SubscriptionManager.get_ask_pulse_requests(user)
+            if total_ask is not None:
+                lines.append(T.PROFILE_ASK_PULSE_REQUESTS.format(used_ask, total_ask))
+            else:
+                lines.append(T.PROFILE_ASK_PULSE_UNLIMITED.format(used_ask))
+        else:
+            lines = [T.PROFILE_TITLE, "", f"Подписка: не активна.", "Оформите подписку в разделе «Подписка»."]
+        text = "\n".join(lines)
+        await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
 
     async def _subscription_status(self, update: Update):
         user = self._user(update.effective_user.id)
@@ -524,14 +574,23 @@ class BotHandlers:
         await self._reply(update, text, kb)
 
     async def _subscription_plans(self, update: Update):
+        text = (
+            f"{T.SUB_PLANS_TITLE}\n\n"
+            "📌 Базовая — только «Спросить Pulse», без загрузки анализов и уведомлений.\n"
+            "⭐ Премиум — загрузка анализов, уведомления, «Спросить Pulse» без лимита.\n"
+        )
         kb = [
-            [InlineKeyboardButton("📅 1 мес — 299 ₽", callback_data="plan_1month")],
-            [InlineKeyboardButton("📅 3 мес — 799 ₽", callback_data="plan_3months")],
-            [InlineKeyboardButton("📅 6 мес — 1399 ₽", callback_data="plan_6months")],
-            [InlineKeyboardButton("📅 12 мес — 2499 ₽", callback_data="plan_12months")],
+            [InlineKeyboardButton("📌 Базовая 1 мес — 199 ₽", callback_data="plan_1month_basic")],
+            [InlineKeyboardButton("📌 Базовая 3 мес — 499 ₽", callback_data="plan_3months_basic")],
+            [InlineKeyboardButton("📌 Базовая 6 мес — 899 ₽", callback_data="plan_6months_basic")],
+            [InlineKeyboardButton("📌 Базовая 12 мес — 1499 ₽", callback_data="plan_12months_basic")],
+            [InlineKeyboardButton("⭐ Премиум 1 мес — 299 ₽", callback_data="plan_1month_premium")],
+            [InlineKeyboardButton("⭐ Премиум 3 мес — 799 ₽", callback_data="plan_3months_premium")],
+            [InlineKeyboardButton("⭐ Премиум 6 мес — 1399 ₽", callback_data="plan_6months_premium")],
+            [InlineKeyboardButton("⭐ Премиум 12 мес — 2499 ₽", callback_data="plan_12months_premium")],
             [InlineKeyboardButton(T.BACK, callback_data="subscription")],
         ]
-        await update.callback_query.edit_message_text(T.SUB_PLANS_TITLE, reply_markup=InlineKeyboardMarkup(kb))
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
     async def _loyalty(self, update: Update):
         text = f"{T.LOYALTY_TITLE}\n\n{T.LOYALTY_RULES}"
@@ -581,6 +640,9 @@ class BotHandlers:
         if not SubscriptionManager.is_subscription_active(user):
             await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
             return
+        if (getattr(user, "subscription_plan", None) or "basic") != "premium":
+            await self._reply(update, "Уведомления доступны только по подписке Премиум.", [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
+            return
         text = f"{T.NOTIFICATIONS_TITLE}\n\n{T.NOTIFICATIONS_DESC}"
         kb = [
             [InlineKeyboardButton(T.NOTIFICATION_CREATE_BTN, callback_data="notification_create")],
@@ -591,7 +653,7 @@ class BotHandlers:
 
     async def _notification_create_start(self, update: Update):
         user = await self._ensure_user(update)
-        if not user or not SubscriptionManager.is_subscription_active(user):
+        if not user or not SubscriptionManager.is_subscription_active(user) or (getattr(user, "subscription_plan", None) or "basic") != "premium":
             await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
             return
         FSMStorage.set_state(update.effective_user.id, States.NOTIFICATION_DATE)
@@ -599,30 +661,51 @@ class BotHandlers:
         await self._reply(update, T.NOTIFICATION_DATE_PROMPT, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
 
     def _parse_notification_date(self, s: str):
-        s = s.strip()
-        try:
-            parts = s.split(".")
-            if len(parts) != 3:
+        """Принимает дату в любом формате: 19.02.2026, 19022026, 19 02 2026, 19-02-2026, 190226."""
+        import re
+        s = re.sub(r"\s+", " ", re.sub(r"[,.\-/]", " ", s.strip()))
+        digits = [int(x) for x in re.findall(r"\d+", s)]
+        if len(digits) >= 3:
+            d, m, y = digits[0], digits[1], digits[2]
+            if y < 100:
+                y += 2000
+            if d > 31:
+                d, y = y, d
+            if 2020 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31:
+                return datetime(y, m, d)
+        if len(digits) == 1 and len(str(digits[0])) >= 6:
+            raw = str(digits[0])
+            if len(raw) == 8:
+                d, m, y = int(raw[0:2]), int(raw[2:4]), int(raw[4:8])
+            elif len(raw) == 6:
+                d, m, y = int(raw[0:2]), int(raw[2:4]), 2000 + int(raw[4:6])
+            else:
                 return None
-            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
-            if year < 2020 or year > 2100 or month < 1 or month > 12 or day < 1 or day > 31:
-                return None
-            return datetime(year, month, day)
-        except (ValueError, IndexError):
-            return None
+            if 2020 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31:
+                return datetime(y, m, d)
+        if len(digits) == 3:
+            if digits[0] > 31:
+                digits[0], digits[2] = digits[2], digits[0]
+            d, m, y = digits[0], digits[1], digits[2]
+            if y < 100:
+                y += 2000
+            if 2020 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31:
+                return datetime(y, m, d)
+        return None
 
     def _parse_notification_time(self, s: str):
-        s = s.strip().replace(",", ".")
-        try:
-            parts = s.split(":")
-            if len(parts) != 2:
-                return None
-            h, m = int(parts[0]), int(parts[1])
-            if h < 0 or h > 23 or m < 0 or m > 59:
-                return None
-            return (h, m)
-        except (ValueError, IndexError):
-            return None
+        """Принимает время в любом формате: 14:30, 14 30, 14.30, в 5, в 17 40, давай в 5."""
+        import re
+        digits = [int(x) for x in re.findall(r"\d+", s)]
+        if len(digits) >= 2:
+            h, m = digits[0], digits[1]
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return (h, m)
+        if len(digits) == 1:
+            h = digits[0]
+            if 0 <= h <= 23:
+                return (h, 0)
+        return None
 
     async def _notification_confirm(self, update: Update):
         uid = update.effective_user.id
@@ -703,8 +786,8 @@ class BotHandlers:
         user = await self._ensure_user(update)
         if not user:
             return
-        if not SubscriptionManager.is_subscription_active(user):
-            await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
+        if not SubscriptionManager.can_ask_pulse(self.db, user.id):
+            await self._reply(update, MSG_NEED_SUB if not SubscriptionManager.is_subscription_active(user) else "Лимит запросов «Спросить Pulse» исчерпан. Продлите подписку или дождитесь обновления лимита.", [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
             return
         FSMStorage.set_state(update.effective_user.id, States.ASK_PULSE_WAITING)
         text = f"{T.ASK_PULSE_PROMPT}\n\n{T.ASK_PULSE_HINT}"
@@ -741,6 +824,9 @@ class BotHandlers:
             await context.bot.edit_message_text(
                 chat_id=chat_id, message_id=msg.message_id, text=f"Ответ:\n\n{answer}", reply_markup=back_kb
             )
+            user = self._user(uid)
+            if user:
+                SubscriptionManager.use_ask_pulse_request(self.db, user.id)
         FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
 
     async def _upload_request(self, update: Update):

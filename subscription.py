@@ -1,15 +1,21 @@
-"""Subscription and referral logic."""
+"""Subscription and referral logic. Базовая и Премиум подписки."""
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from sqlalchemy.orm import Session
 from database import User, Payment, Referral
 from loguru import logger
 
+# Базовая: только «Спросить Pulse», без загрузки анализов и уведомлений. Дешевле.
+# Премиум: всё включено (загрузка, уведомления, Спросить Pulse без лимита или с большим лимитом).
 PLANS = {
-    "1month": {"days": 30, "price": 299, "requests": 3},
-    "3months": {"days": 90, "price": 799, "requests": 15},
-    "6months": {"days": 180, "price": 1399, "requests": None},
-    "12months": {"days": 365, "price": 2499, "requests": None},
+    "1month_basic": {"days": 30, "price": 199, "plan": "basic", "upload_requests": 0, "ask_pulse_requests": 20},
+    "3months_basic": {"days": 90, "price": 499, "plan": "basic", "upload_requests": 0, "ask_pulse_requests": 60},
+    "6months_basic": {"days": 180, "price": 899, "plan": "basic", "upload_requests": 0, "ask_pulse_requests": 150},
+    "12months_basic": {"days": 365, "price": 1499, "plan": "basic", "upload_requests": 0, "ask_pulse_requests": 400},
+    "1month_premium": {"days": 30, "price": 299, "plan": "premium", "upload_requests": 3, "ask_pulse_requests": None},
+    "3months_premium": {"days": 90, "price": 799, "plan": "premium", "upload_requests": 15, "ask_pulse_requests": None},
+    "6months_premium": {"days": 180, "price": 1399, "plan": "premium", "upload_requests": None, "ask_pulse_requests": None},
+    "12months_premium": {"days": 365, "price": 2499, "plan": "premium", "upload_requests": None, "ask_pulse_requests": None},
 }
 BONUS_PER_REFERRAL = 5
 
@@ -32,22 +38,49 @@ def activate(db: Session, user_id: int, plan: str) -> bool:
     else:
         user.subscription_expire_at = datetime.utcnow() + timedelta(days=p["days"])
         user.used_requests = 0
-    user.total_requests = p["requests"] if p["requests"] is not None else 999999
+        user.used_ask_pulse_requests = 0
+    user.subscription_plan = p["plan"]
+    user.total_requests = p["upload_requests"] if p["upload_requests"] is not None else 999999
+    user.total_ask_pulse_requests = p["ask_pulse_requests"]
     user.subscription_status = "active"
     db.commit()
     return True
 
 
 def get_requests(user: Optional[User]) -> Tuple[int, int, int, int]:
+    """Возвращает (осталось загрузок, лимит загрузок, бонус, использовано загрузок)."""
     if not user or not is_active(user):
         return (0, 0, 0, 0)
     t, b, u = user.total_requests or 0, user.bonus_requests or 0, user.used_requests or 0
     return (max(0, t + b - u), t, b, u)
 
 
+def get_ask_pulse_requests(user: Optional[User]) -> Tuple[Optional[int], int]:
+    """Возвращает (лимит запросов Спросить Pulse или None = без лимита, использовано)."""
+    if not user or not is_active(user):
+        return (0, 0)
+    total = getattr(user, "total_ask_pulse_requests", None)
+    used = getattr(user, "used_ask_pulse_requests", 0) or 0
+    return (total, used)
+
+
 def can_analyze(db: Session, user_id: int) -> bool:
+    """Загрузка анализов только для Премиум и при наличии лимита."""
     user = db.query(User).filter(User.id == user_id).first()
-    return user and is_active(user) and get_requests(user)[0] > 0
+    if not user or not is_active(user) or (user.subscription_plan or "basic") != "premium":
+        return False
+    return get_requests(user)[0] > 0
+
+
+def can_ask_pulse(db: Session, user_id: int) -> bool:
+    """Спросить Pulse: активная подписка и (нет лимита или есть остаток)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not is_active(user):
+        return False
+    total, used = get_ask_pulse_requests(user)
+    if total is None:
+        return True
+    return used < total
 
 
 def use_request(db: Session, user_id: int) -> bool:
@@ -55,6 +88,17 @@ def use_request(db: Session, user_id: int) -> bool:
     if not user or not can_analyze(db, user_id):
         return False
     user.used_requests = (user.used_requests or 0) + 1
+    db.commit()
+    return True
+
+
+def use_ask_pulse_request(db: Session, user_id: int) -> bool:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not can_ask_pulse(db, user_id):
+        return False
+    total = getattr(user, "total_ask_pulse_requests", None)
+    if total is not None:
+        user.used_ask_pulse_requests = (getattr(user, "used_ask_pulse_requests", 0) or 0) + 1
     db.commit()
     return True
 
@@ -89,6 +133,7 @@ def expire_subscriptions(db: Session) -> int:
         u.subscription_status = "expired"
         u.bonus_requests = 0
         u.used_requests = 0
+        u.used_ask_pulse_requests = getattr(u, "used_ask_pulse_requests", 0) or 0
     db.commit()
     return len(q)
 
@@ -135,8 +180,11 @@ class SubscriptionManager:
     is_subscription_active = staticmethod(is_active)
     activate_subscription = staticmethod(activate)
     get_available_requests = staticmethod(get_requests)
+    get_ask_pulse_requests = staticmethod(get_ask_pulse_requests)
     can_perform_analysis = staticmethod(can_analyze)
+    can_ask_pulse = staticmethod(can_ask_pulse)
     use_request = staticmethod(use_request)
+    use_ask_pulse_request = staticmethod(use_ask_pulse_request)
     add_bonus_requests = staticmethod(add_bonus)
     expire_subscriptions = staticmethod(expire_subscriptions)
     deactivate = staticmethod(deactivate)

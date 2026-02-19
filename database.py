@@ -45,9 +45,12 @@ class User(Base):
     telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
     subscription_status = Column(String, default="inactive")  # active, inactive, expired
     subscription_expire_at = Column(DateTime, nullable=True)
-    total_requests = Column(Integer, default=0)  # Total requests from tariff
-    bonus_requests = Column(Integer, default=0)  # Bonus requests from referrals
-    used_requests = Column(Integer, default=0)  # Used requests count
+    subscription_plan = Column(String, default="basic")  # basic | premium
+    total_requests = Column(Integer, default=0)  # Лимит загрузок анализов (только Premium)
+    bonus_requests = Column(Integer, default=0)  # Бонусные запросы с рефералов
+    used_requests = Column(Integer, default=0)  # Использовано загрузок анализов
+    total_ask_pulse_requests = Column(Integer, nullable=True)  # Лимит «Спросить Pulse» (NULL = без лимита)
+    used_ask_pulse_requests = Column(Integer, default=0)  # Использовано запросов Спросить Pulse
     referrer_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Who referred this user
     referral_code = Column(String, unique=True, nullable=True, index=True)  # Unique referral code
     username = Column(String, nullable=True, index=True)  # Telegram @username for admin search
@@ -187,6 +190,12 @@ def _migrate_add_columns(conn):
     if not _column_exists(conn, "users", "username"):
         conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users(username)"))
+    if not _column_exists(conn, "users", "subscription_plan"):
+        conn.execute(text("ALTER TABLE users ADD COLUMN subscription_plan VARCHAR DEFAULT 'basic'"))
+    if not _column_exists(conn, "users", "total_ask_pulse_requests"):
+        conn.execute(text("ALTER TABLE users ADD COLUMN total_ask_pulse_requests INTEGER"))
+    if not _column_exists(conn, "users", "used_ask_pulse_requests"):
+        conn.execute(text("ALTER TABLE users ADD COLUMN used_ask_pulse_requests INTEGER DEFAULT 0"))
     # user_notifications table (created by create_all if new; for old DBs without Alembic)
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS user_notifications (
