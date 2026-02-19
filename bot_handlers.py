@@ -560,11 +560,16 @@ class BotHandlers:
             FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
             return
         results = search_faq(query, top_k=1)
+        back_kb = InlineKeyboardMarkup([[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
         if not results:
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=T.ASK_PULSE_NOT_FOUND)
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg.message_id, text=T.ASK_PULSE_NOT_FOUND, reply_markup=back_kb
+            )
         else:
             _, answer, _ = results[0]
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"Ответ:\n\n{answer}")
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg.message_id, text=f"Ответ:\n\n{answer}", reply_markup=back_kb
+            )
         FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
 
     async def _upload_request(self, update: Update):
