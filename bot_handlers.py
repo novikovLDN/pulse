@@ -32,8 +32,17 @@ class BotHandlers:
     
     def __init__(self, db: Session):
         self.db = db
-        self.llm_service = LLMService()
-        self.file_processor = FileProcessor()
+        try:
+            self.llm_service = LLMService()
+        except Exception as e:
+            logger.error(f"Failed to initialize LLMService: {e}")
+            self.llm_service = None
+        
+        try:
+            self.file_processor = FileProcessor()
+        except Exception as e:
+            logger.error(f"Failed to initialize FileProcessor: {e}")
+            self.file_processor = None
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command."""
@@ -205,6 +214,16 @@ By using this service, you acknowledge that:
         await update.message.reply_text("Processing file... Please wait.")
         
         try:
+            if not self.file_processor:
+                await update.message.reply_text("❌ File processing service is not available. Please contact support.")
+                FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
+                return
+            
+            if not self.llm_service or not self.llm_service.enabled:
+                await update.message.reply_text("❌ LLM service is not configured. Please contact support.")
+                FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
+                return
+            
             # Extract text
             raw_text = self.file_processor.process_file(file_bytes, file_type)
             
@@ -308,6 +327,11 @@ By using this service, you acknowledge that:
                 }
                 
                 # Generate report
+                if not self.llm_service or not self.llm_service.enabled:
+                    await update.message.reply_text("❌ LLM service is not configured. Cannot generate report.")
+                    FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
+                    return
+                
                 report = self.llm_service.generate_clinical_report(
                     structured_data,
                     clinical_context
@@ -366,10 +390,18 @@ By using this service, you acknowledge that:
             await update.message.reply_text("Processing your question...")
             
             try:
+                if not self.llm_service or not self.llm_service.enabled:
+                    await update.message.reply_text("❌ LLM service is not configured. Cannot answer questions.")
+                    return
+                
                 session_id = fsm_data['session_id']
                 structured_result = self.db.query(StructuredResult).filter(
                     StructuredResult.session_id == session_id
                 ).first()
+                
+                if not structured_result:
+                    await update.message.reply_text("❌ Analysis not found.")
+                    return
                 
                 answer = self.llm_service.answer_follow_up_question(
                     structured_result.structured_json,
@@ -578,6 +610,10 @@ By using this service, you acknowledge that:
         await update.callback_query.edit_message_text("Comparing analyses... Please wait.")
         
         try:
+            if not self.llm_service or not self.llm_service.enabled:
+                await update.callback_query.edit_message_text("❌ LLM service is not configured. Cannot compare analyses.")
+                return
+            
             session1 = self.db.query(AnalysisSession).filter(AnalysisSession.id == session1_id).first()
             session2 = self.db.query(AnalysisSession).filter(AnalysisSession.id == session2_id).first()
             

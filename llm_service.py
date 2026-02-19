@@ -10,12 +10,27 @@ class LLMService:
     """Service for LLM interactions."""
     
     def __init__(self):
-        self.client = OpenAI(api_key=settings.openai_api_key)
+        if not settings.openai_api_key:
+            logger.warning("⚠️ OPENAI_API_KEY not set, LLM features will be disabled")
+            self.client = None
+            self.enabled = False
+        else:
+            try:
+                self.client = OpenAI(api_key=settings.openai_api_key)
+                self.enabled = True
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize OpenAI client: {e}")
+                self.client = None
+                self.enabled = False
+        
         self.base_model = settings.openai_model
         self.premium_model = settings.openai_premium_model
     
     def extract_structured_data(self, raw_text: str) -> Dict[str, Any]:
         """Extract structured laboratory data from raw text."""
+        if not self.enabled or not self.client:
+            raise ValueError("OpenAI API key not configured. Cannot extract structured data.")
+        
         prompt = """You are a medical data extraction system. Extract laboratory test results from the provided text and return ONLY valid JSON.
 
 Extract:
@@ -71,6 +86,8 @@ Return ONLY the JSON object, no additional text."""
         use_premium: bool = False
     ) -> str:
         """Generate clinical interpretation report."""
+        if not self.enabled or not self.client:
+            raise ValueError("OpenAI API key not configured. Cannot generate clinical report.")
         
         model = self.premium_model if use_premium else self.base_model
         
@@ -132,6 +149,8 @@ Generate a structured clinical interpretation report following the specified for
         clinical_context2: Dict[str, Any]
     ) -> str:
         """Compare two analyses and generate dynamic report."""
+        if not self.enabled or not self.client:
+            raise ValueError("OpenAI API key not configured. Cannot compare analyses.")
         
         system_prompt = """You are a clinical laboratory interpretation assistant specializing in longitudinal analysis. Compare two sets of laboratory results and identify trends and changes.
 
@@ -182,6 +201,8 @@ Generate a comparison report focusing on changes and trends."""
         question: str
     ) -> str:
         """Answer follow-up question about an analysis."""
+        if not self.enabled or not self.client:
+            raise ValueError("OpenAI API key not configured. Cannot answer follow-up question.")
         
         system_prompt = """You are a clinical laboratory interpretation assistant answering a follow-up question about a previous analysis.
 

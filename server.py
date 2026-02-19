@@ -12,6 +12,14 @@ from config import settings
 from loguru import logger
 import json
 
+# Import admin API routes
+try:
+    from admin.api import app as admin_app
+    ADMIN_AVAILABLE = True
+except Exception as e:
+    ADMIN_AVAILABLE = False
+    logger.warning(f"Admin API not available: {e}")
+
 
 # Create unified FastAPI app
 app = FastAPI(title="Pulse Bot Server")
@@ -24,6 +32,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include admin API routes if available
+if ADMIN_AVAILABLE:
+    try:
+        # Include all routes from admin app
+        for route in admin_app.routes:
+            # Update path to include /admin prefix
+            if hasattr(route, 'path'):
+                route.path = f"/admin{route.path}" if not route.path.startswith("/admin") else route.path
+            app.routes.append(route)
+        logger.info("✅ Admin API routes included at /admin")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not include admin API routes: {e}")
+        ADMIN_AVAILABLE = False
 
 
 @app.get("/")
@@ -69,17 +91,25 @@ async def yookassa_webhook(request: Request):
         data = await request.json()
         logger.info(f"Received YooKassa webhook: {json.dumps(data)}")
         
-        db = next(get_db())
-        success = PaymentService.handle_webhook(data, db)
-        
-        if success:
-            return {"status": "ok"}
-        else:
-            return {"status": "error", "message": "Failed to process webhook"}
+        try:
+            db = next(get_db())
+            success = PaymentService.handle_webhook(data, db)
+            
+            if success:
+                return {"status": "ok"}
+            else:
+                return {"status": "error", "message": "Failed to process webhook"}
+        except Exception as db_error:
+            logger.error(f"Database error processing webhook: {db_error}")
+            # Still return 200 to prevent YooKassa from retrying
+            return {"status": "error", "message": "Internal error"}
     
     except Exception as e:
         logger.error(f"Error processing YooKassa webhook: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        logger.error(traceback.format_exc())
+        # Return 200 to prevent YooKassa from retrying
+        return {"status": "error", "message": str(e)}
 
 
 @app.post("/telegram-webhook")
@@ -107,7 +137,8 @@ def run_server(bot_app: Application, host: str = "0.0.0.0", port: int = 8080):
     logger.info(f"🚀 Starting webhook server on {host}:{port}")
     logger.info(f"📡 Health check available at: http://{host}:{port}/health")
     logger.info(f"💳 YooKassa webhook: http://{host}:{port}/webhook/yookassa")
-    logger.info(f"📊 Admin API: http://{host}:{port}/admin")
+    if ADMIN_AVAILABLE:
+        logger.info(f"📊 Admin API: http://{host}:{port}/admin")
     logger.info(f"✅ Server is ready to accept connections")
     
     try:

@@ -7,8 +7,23 @@ from config import settings
 
 Base = declarative_base()
 
-engine = create_engine(settings.database_url, echo=False)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Create engine with connection pooling and error handling
+try:
+    engine = create_engine(
+        settings.database_url,
+        echo=False,
+        pool_pre_ping=True,  # Verify connections before using
+        pool_recycle=3600,   # Recycle connections after 1 hour
+        connect_args={
+            "connect_timeout": 10,
+            "options": "-c statement_timeout=30000"
+        }
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+except Exception as e:
+    from loguru import logger
+    logger.error(f"❌ Failed to create database engine: {e}")
+    raise
 
 
 class User(Base):

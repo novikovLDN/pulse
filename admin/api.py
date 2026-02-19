@@ -7,6 +7,7 @@ from subscription import SubscriptionManager
 from config import settings
 from datetime import datetime
 from typing import Optional
+from loguru import logger
 import json
 
 
@@ -15,6 +16,9 @@ app = FastAPI(title="Pulse Bot Admin API")
 
 def verify_admin_token(authorization: Optional[str] = Header(None)):
     """Verify admin token."""
+    if not settings.admin_secret_key:
+        raise HTTPException(status_code=503, detail="Admin API is not configured")
+    
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     

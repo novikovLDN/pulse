@@ -17,6 +17,7 @@ from bot_handlers import BotHandlers
 from subscription import SubscriptionManager
 from scheduler import setup_scheduler
 from server import run_server
+from redis_client import redis_available, redis_client
 from config import settings
 from loguru import logger
 import sys
@@ -169,6 +170,7 @@ def main():
     # Check environment variables
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Mode: Polling")
+    logger.info(f"Port: {os.getenv('PORT', '8080')}")
     
     # Validate critical settings
     if not settings.telegram_bot_token:
@@ -181,10 +183,30 @@ def main():
         logger.error("Please set DATABASE_URL in environment variables")
         sys.exit(1)
     
+    # Check optional services
+    logger.info("📋 Checking services...")
+    logger.info(f"  Redis: {'✅ Available' if redis_client and redis_available else '⚠️ Not available (using memory fallback)'}")
+    logger.info(f"  OpenAI: {'✅ Configured' if settings.openai_api_key else '⚠️ Not configured'}")
+    logger.info(f"  YooKassa: {'✅ Configured' if settings.yookassa_shop_id else '⚠️ Not configured'}")
+    
+    # Test database connection
+    try:
+        logger.info("🔄 Testing database connection...")
+        db = get_db_session()
+        db.execute("SELECT 1")
+        db.close()
+        logger.info("✅ Database connection successful")
+    except Exception as e:
+        logger.error(f"❌ Database connection failed: {e}")
+        logger.error("Please check DATABASE_URL and ensure database is accessible")
+        sys.exit(1)
+    
     try:
         bot = PulseBot()
         logger.info("🔄 Running in polling mode")
         bot.run_polling()
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
     except Exception as e:
         logger.error(f"❌ Fatal error starting bot: {e}")
         import traceback

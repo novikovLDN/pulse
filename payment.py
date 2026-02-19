@@ -24,7 +24,8 @@ class PaymentService:
     def create_payment(user_id: int, plan: str, db: Session) -> dict:
         """Create payment in YooKassa."""
         if not settings.yookassa_shop_id or not settings.yookassa_secret_key:
-            raise ValueError("YooKassa credentials not configured")
+            logger.error("YooKassa credentials not configured")
+            raise ValueError("YooKassa payment service is not available. Please contact support.")
         
         if plan not in SubscriptionManager.PLANS:
             raise ValueError(f"Invalid plan: {plan}")
