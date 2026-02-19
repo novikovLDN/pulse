@@ -1,5 +1,5 @@
 """Database models and connection."""
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, ForeignKey, JSON, Numeric, Text
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, DateTime, Boolean, ForeignKey, JSON, Numeric, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -42,7 +42,7 @@ class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, unique=True, index=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
     subscription_status = Column(String, default="inactive")  # active, inactive, expired
     subscription_expire_at = Column(DateTime, nullable=True)
     total_requests = Column(Integer, default=0)  # Total requests from tariff
@@ -168,6 +168,8 @@ def _migrate_add_columns(conn):
             conn.execute(text(sql))
     if not _column_exists(conn, "payments", "payment_date"):
         conn.execute(text("ALTER TABLE payments ADD COLUMN payment_date TIMESTAMP"))
+    # Telegram user IDs can exceed 2^31; ensure BIGINT
+    conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS referrals (
             id SERIAL PRIMARY KEY,
