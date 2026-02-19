@@ -128,6 +128,21 @@ class FollowUpQuestion(Base):
     session = relationship("AnalysisSession", back_populates="follow_up_questions")
 
 
+class UserNotification(Base):
+    """Пользовательское уведомление на дату и время."""
+    __tablename__ = "user_notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    scheduled_at = Column(DateTime, nullable=False)  # UTC
+    text = Column(Text, nullable=False)
+    sent = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", backref="notifications", foreign_keys=[user_id])
+
+
 class Referral(Base):
     """Referral tracking model."""
     __tablename__ = "referrals"
@@ -172,6 +187,17 @@ def _migrate_add_columns(conn):
     if not _column_exists(conn, "users", "username"):
         conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users(username)"))
+    # user_notifications table (created by create_all if new; for old DBs without Alembic)
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS user_notifications (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            scheduled_at TIMESTAMP NOT NULL,
+            text TEXT NOT NULL,
+            sent BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
     # Telegram user IDs can exceed 2^31; ensure BIGINT
     conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
     conn.execute(text("""

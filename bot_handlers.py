@@ -25,7 +25,7 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from sqlalchemy.orm import Session
-from database import User, AnalysisSession, StructuredResult, FollowUpQuestion
+from database import User, AnalysisSession, StructuredResult, FollowUpQuestion, UserNotification
 from subscription import SubscriptionManager
 from payment import PaymentService
 from file_processor import FileProcessor
@@ -33,6 +33,8 @@ from llm_service import LLMService
 from redis_client import FSMStorage
 from loguru import logger
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 try:
     from faq_analyses import search_faq
@@ -213,6 +215,26 @@ class T:
     ASK_PULSE_SEARCHING = "Ищем ответ в базе…"
     ASK_PULSE_NOT_FOUND = "По вашему запросу подходящего ответа не найдено. Попробуйте переформулировать вопрос или использовать другие ключевые слова (название показателя, «норма», «повышен», «понижен»)."
 
+    # Уведомления
+    NOTIFICATIONS_TITLE = "🔔 Уведомления"
+    NOTIFICATIONS_DESC = "Создайте напоминание на нужную дату и время — бот пришлёт вам ваше сообщение."
+    NOTIFICATION_CREATE_BTN = "➕ Создать уведомление"
+    NOTIFICATION_MY_BTN = "📋 Мои уведомления"
+    NOTIFICATION_DATE_PROMPT = "Введите дату в формате ДД.ММ.ГГГГ (например 25.12.2025):"
+    NOTIFICATION_TIME_PROMPT = "Введите время в формате ЧЧ:ММ (по московскому времени, например 14:30):"
+    NOTIFICATION_TEXT_PROMPT = "Введите текст уведомления — это сообщение придёт вам в выбранные день и время:"
+    NOTIFICATION_CONFIRM = "Подтвердить"
+    NOTIFICATION_CANCEL = "Отмена"
+    NOTIFICATION_SUMMARY = "Уведомление на {date} в {time} (МСК):\n\n{text}"
+    NOTIFICATION_SAVED = "Уведомление создано. Вы получите его в указанные день и время."
+    NOTIFICATION_INVALID_DATE = "Неверный формат даты. Введите ДД.ММ.ГГГГ (например 25.12.2025)."
+    NOTIFICATION_INVALID_TIME = "Неверный формат времени. Введите ЧЧ:ММ (например 14:30)."
+    NOTIFICATION_DATE_PAST = "Эта дата уже прошла. Выберите будущую дату."
+    NOTIFICATION_EMPTY_TEXT = "Текст не может быть пустым. Введите напоминание."
+    NOTIFICATION_LIST_EMPTY = "У вас пока нет запланированных уведомлений."
+    NOTIFICATION_LIST_HEADER = "Ваши запланированные уведомления:"
+    NOTIFICATION_DELETE_BTN = "🗑 Удалить"
+
 # States
 class States:
     START, TERMS_ACCEPTED = "start", "terms_accepted"
@@ -221,6 +243,10 @@ class States:
     PROCESSING_FILE, WAITING_FOLLOW_UP = "processing_file", "waiting_follow_up"
     ADMIN_WAIT_ID, ADMIN_WAIT_USERNAME = "admin_wait_id", "admin_wait_username"
     ASK_PULSE_WAITING = "ask_pulse_waiting"
+    NOTIFICATION_DATE = "notification_date"
+    NOTIFICATION_TIME = "notification_time"
+    NOTIFICATION_TEXT = "notification_text"
+    NOTIFICATION_CONFIRM = "notification_confirm"
 
 MSG_NEED_START = T.NEED_START
 MSG_NEED_SUB = T.NEED_SUB
@@ -431,6 +457,18 @@ class BotHandlers:
             await self._follow_up_ask(update, context)
         elif data.startswith("full_report_"):
             await self._analysis_full_report(update, int(data.replace("full_report_", "")))
+        elif data == "notifications":
+            await self._notifications_menu(update)
+        elif data == "notifications_list":
+            await self._notifications_list(update)
+        elif data == "notification_create":
+            await self._notification_create_start(update)
+        elif data == "notification_confirm":
+            await self._notification_confirm(update)
+        elif data == "notification_cancel":
+            await self._notification_cancel(update)
+        elif data.startswith("notification_del_"):
+            await self._notification_delete(update, int(data.replace("notification_del_", "")))
 
     async def _main_menu(self, update: Update):
         uid = update.effective_user.id
@@ -442,6 +480,7 @@ class BotHandlers:
                 [InlineKeyboardButton("💬 Спросить Pulse", callback_data="ask_pulse")],
                 [InlineKeyboardButton("📊 Сравнить", callback_data="compare_analyses")],
                 [InlineKeyboardButton("📁 Мои анализы", callback_data="recent_analyses")],
+                [InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")],
                 [InlineKeyboardButton("❓ Как пользоваться", callback_data="how_to_use")],
                 [InlineKeyboardButton("💳 Подписка", callback_data="subscription")],
                 [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
@@ -534,6 +573,131 @@ class BotHandlers:
     async def _help(self, update: Update):
         text = f"{T.HELP_TITLE}\n\n{T.HELP_BODY}"
         await self._reply(update, text, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
+
+    async def _notifications_menu(self, update: Update):
+        user = await self._ensure_user(update)
+        if not user:
+            return
+        if not SubscriptionManager.is_subscription_active(user):
+            await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
+            return
+        text = f"{T.NOTIFICATIONS_TITLE}\n\n{T.NOTIFICATIONS_DESC}"
+        kb = [
+            [InlineKeyboardButton(T.NOTIFICATION_CREATE_BTN, callback_data="notification_create")],
+            [InlineKeyboardButton(T.NOTIFICATION_MY_BTN, callback_data="notifications_list")],
+            [InlineKeyboardButton(T.BACK, callback_data="back_menu")],
+        ]
+        await self._reply(update, text, kb)
+
+    async def _notification_create_start(self, update: Update):
+        user = await self._ensure_user(update)
+        if not user or not SubscriptionManager.is_subscription_active(user):
+            await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
+            return
+        FSMStorage.set_state(update.effective_user.id, States.NOTIFICATION_DATE)
+        FSMStorage.set_data(update.effective_user.id, {})
+        await self._reply(update, T.NOTIFICATION_DATE_PROMPT, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
+
+    def _parse_notification_date(self, s: str):
+        s = s.strip()
+        try:
+            parts = s.split(".")
+            if len(parts) != 3:
+                return None
+            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+            if year < 2020 or year > 2100 or month < 1 or month > 12 or day < 1 or day > 31:
+                return None
+            return datetime(year, month, day)
+        except (ValueError, IndexError):
+            return None
+
+    def _parse_notification_time(self, s: str):
+        s = s.strip().replace(",", ".")
+        try:
+            parts = s.split(":")
+            if len(parts) != 2:
+                return None
+            h, m = int(parts[0]), int(parts[1])
+            if h < 0 or h > 23 or m < 0 or m > 59:
+                return None
+            return (h, m)
+        except (ValueError, IndexError):
+            return None
+
+    async def _notification_confirm(self, update: Update):
+        uid = update.effective_user.id
+        user = self._user(uid)
+        if not user:
+            FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+            await self._main_menu(update)
+            return
+        fsm = FSMStorage.get_data(uid)
+        date_str = fsm.get("notification_date")  # "YYYY-MM-DD"
+        time_list = fsm.get("notification_time")  # [h, m]
+        text = fsm.get("notification_text")
+        if not date_str or not time_list or not text or len(time_list) < 2:
+            FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+            await self._reply(update, MSG_ERR, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
+            return
+        try:
+            from datetime import timezone
+            y, m, d = map(int, date_str.split("-"))
+            h, minu = int(time_list[0]), int(time_list[1])
+            moscow = ZoneInfo("Europe/Moscow")
+            dt_moscow = datetime(y, m, d, h, minu, tzinfo=moscow)
+            dt_utc = dt_moscow.astimezone(timezone.utc).replace(tzinfo=None)  # naive UTC для хранения
+        except Exception:
+            FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+            await self._reply(update, MSG_ERR, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
+            return
+        self.db.add(UserNotification(user_id=user.id, scheduled_at=dt_utc, text=text))
+        self.db.commit()
+        FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+        FSMStorage.set_data(uid, {})
+        await self._reply(update, T.NOTIFICATION_SAVED, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
+
+    async def _notification_cancel(self, update: Update):
+        uid = update.effective_user.id
+        FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+        FSMStorage.set_data(uid, {})
+        await self._notifications_menu(update)
+
+    async def _notification_delete(self, update: Update, notification_id: int):
+        user = await self._ensure_user(update)
+        if not user:
+            return
+        n = self.db.query(UserNotification).filter(
+            UserNotification.id == notification_id,
+            UserNotification.user_id == user.id,
+            UserNotification.sent == False,
+        ).first()
+        if n:
+            self.db.delete(n)
+            self.db.commit()
+        await self._notifications_list(update)
+
+    async def _notifications_list(self, update: Update):
+        user = await self._ensure_user(update)
+        if not user:
+            return
+        rows = self.db.query(UserNotification).filter(
+            UserNotification.user_id == user.id,
+            UserNotification.sent == False,
+        ).order_by(UserNotification.scheduled_at.asc()).all()
+        if not rows:
+            await self._reply(update, T.NOTIFICATION_LIST_EMPTY, [[InlineKeyboardButton(T.BACK, callback_data="notifications")]])
+            return
+        from datetime import timezone
+        moscow = ZoneInfo("Europe/Moscow")
+        lines = [T.NOTIFICATION_LIST_HEADER]
+        kb = []
+        for n in rows[:20]:
+            dt_utc = n.scheduled_at if n.scheduled_at.tzinfo else n.scheduled_at.replace(tzinfo=timezone.utc)
+            dt_msk = dt_utc.astimezone(moscow)
+            lines.append(f"\n• {dt_msk.strftime('%d.%m.%Y %H:%M')} (МСК)\n  {n.text[:60]}{'…' if len(n.text) > 60 else ''}")
+            kb.append([InlineKeyboardButton(f"🗑 {dt_msk.strftime('%d.%m %H:%M')}", callback_data=f"notification_del_{n.id}")])
+        kb.append([InlineKeyboardButton(T.BACK, callback_data="notifications")])
+        await self._reply(update, "\n".join(lines), kb)
 
     async def _ask_pulse_request(self, update: Update):
         user = await self._ensure_user(update)
@@ -680,7 +844,58 @@ class BotHandlers:
             await self._ask_pulse_handle(update, context, text)
             return
 
-        if state == States.COLLECTING_AGE:
+        if state == States.NOTIFICATION_DATE:
+            date_obj = self._parse_notification_date(text)
+            if not date_obj:
+                await update.message.reply_text(T.NOTIFICATION_INVALID_DATE)
+                return
+            from datetime import datetime as dt_now
+            if date_obj.date() < dt_now.now().date():
+                await update.message.reply_text(T.NOTIFICATION_DATE_PAST)
+                return
+            date_str = date_obj.strftime("%Y-%m-%d")
+            fsm["notification_date"] = date_str
+            FSMStorage.set_data(uid, fsm)
+            FSMStorage.set_state(uid, States.NOTIFICATION_TIME)
+            await update.message.reply_text(T.NOTIFICATION_TIME_PROMPT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(T.BACK, callback_data="notifications")]]))
+
+        elif state == States.NOTIFICATION_TIME:
+            time_tup = self._parse_notification_time(text)
+            if not time_tup:
+                await update.message.reply_text(T.NOTIFICATION_INVALID_TIME)
+                return
+            fsm["notification_time"] = list(time_tup)
+            FSMStorage.set_data(uid, fsm)
+            FSMStorage.set_state(uid, States.NOTIFICATION_TEXT)
+            await update.message.reply_text(T.NOTIFICATION_TEXT_PROMPT, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(T.BACK, callback_data="notifications")]]))
+
+        elif state == States.NOTIFICATION_TEXT:
+            if not text or not text.strip():
+                await update.message.reply_text(T.NOTIFICATION_EMPTY_TEXT)
+                return
+            fsm["notification_text"] = text.strip()[:2000]
+            FSMStorage.set_data(uid, fsm)
+            FSMStorage.set_state(uid, States.NOTIFICATION_CONFIRM)
+            date_str = fsm.get("notification_date", "")
+            time_list = fsm.get("notification_time", [0, 0])
+            try:
+                y, m, d = map(int, date_str.split("-"))
+                date_display = f"{d:02d}.{m:02d}.{y}"
+                time_display = f"{int(time_list[0]):02d}:{int(time_list[1]):02d}"
+            except Exception:
+                date_display = date_str
+                time_display = f"{time_list[0]}:{time_list[1]}"
+            summary = T.NOTIFICATION_SUMMARY.format(date=date_display, time=time_display, text=fsm["notification_text"])
+            kb = [
+                [InlineKeyboardButton(T.NOTIFICATION_CONFIRM, callback_data="notification_confirm")],
+                [InlineKeyboardButton(T.NOTIFICATION_CANCEL, callback_data="notification_cancel")],
+            ]
+            await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup(kb))
+
+        elif state == States.NOTIFICATION_CONFIRM:
+            await update.message.reply_text("Нажмите «Подтвердить» или «Отмена» под сообщением выше.")
+
+        elif state == States.COLLECTING_AGE:
             fsm["age"] = text
             FSMStorage.set_data(uid, fsm)
             FSMStorage.set_state(uid, States.COLLECTING_SEX)
