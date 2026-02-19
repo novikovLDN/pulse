@@ -1,0 +1,36 @@
+# Telegram Bot
+python-telegram-bot==20.7
+python-telegram-bot[job-queue]==20.7
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.12.1
+
+# Redis
+redis==5.0.1
+hiredis==2.2.3
+
+# File Processing
+PyMuPDF==1.23.8
+Pillow==10.1.0
+pytesseract==0.3.10
+
+# LLM
+openai==1.6.1
+
+# Payment
+aiohttp==3.9.1
+yookassa==3.0.0
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+
+# Logging
+loguru==0.7.2
+
+# Admin
+fastapi==0.104.1
+uvicorn==0.24.0
