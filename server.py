@@ -12,33 +12,6 @@ from config import settings
 from loguru import logger
 import json
 
-# Import admin API routes
-ADMIN_AVAILABLE = False
-try:
-    from admin.api import app as admin_app
-    # Include admin routes manually
-    for route in admin_app.routes:
-        # Create new route with /admin prefix
-        if hasattr(route, 'path') and route.path != "/":
-            # Clone route with new path
-            from fastapi.routing import APIRoute
-            if isinstance(route, APIRoute):
-                new_route = APIRoute(
-                    path=f"/admin{route.path}",
-                    endpoint=route.endpoint,
-                    methods=route.methods,
-                    name=route.name,
-                    dependencies=route.dependencies
-                )
-                app.routes.append(new_route)
-            else:
-                app.routes.append(route)
-    ADMIN_AVAILABLE = True
-    logger.info("✅ Admin API routes included")
-except Exception as e:
-    logger.warning(f"⚠️ Admin API not available: {e}")
-    ADMIN_AVAILABLE = False
-
 
 # Create unified FastAPI app
 app = FastAPI(title="Pulse Bot Server")
@@ -52,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import admin API routes
+# Import and include admin API routes
 ADMIN_AVAILABLE = False
 try:
     from admin.api import app as admin_app
@@ -73,7 +46,6 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Admin API not available: {e}")
     ADMIN_AVAILABLE = False
-
 
 
 @app.get("/")
@@ -129,6 +101,8 @@ async def yookassa_webhook(request: Request):
                 return {"status": "error", "message": "Failed to process webhook"}
         except Exception as db_error:
             logger.error(f"Database error processing webhook: {db_error}")
+            import traceback
+            logger.error(traceback.format_exc())
             # Still return 200 to prevent YooKassa from retrying
             return {"status": "error", "message": "Internal error"}
     
