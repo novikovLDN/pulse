@@ -13,12 +13,31 @@ from loguru import logger
 import json
 
 # Import admin API routes
+ADMIN_AVAILABLE = False
 try:
     from admin.api import app as admin_app
+    # Include admin routes manually
+    for route in admin_app.routes:
+        # Create new route with /admin prefix
+        if hasattr(route, 'path') and route.path != "/":
+            # Clone route with new path
+            from fastapi.routing import APIRoute
+            if isinstance(route, APIRoute):
+                new_route = APIRoute(
+                    path=f"/admin{route.path}",
+                    endpoint=route.endpoint,
+                    methods=route.methods,
+                    name=route.name,
+                    dependencies=route.dependencies
+                )
+                app.routes.append(new_route)
+            else:
+                app.routes.append(route)
     ADMIN_AVAILABLE = True
+    logger.info("✅ Admin API routes included")
 except Exception as e:
+    logger.warning(f"⚠️ Admin API not available: {e}")
     ADMIN_AVAILABLE = False
-    logger.warning(f"Admin API not available: {e}")
 
 
 # Create unified FastAPI app
@@ -33,19 +52,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include admin API routes if available
-if ADMIN_AVAILABLE:
-    try:
-        # Include all routes from admin app
-        for route in admin_app.routes:
-            # Update path to include /admin prefix
-            if hasattr(route, 'path'):
-                route.path = f"/admin{route.path}" if not route.path.startswith("/admin") else route.path
-            app.routes.append(route)
-        logger.info("✅ Admin API routes included at /admin")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not include admin API routes: {e}")
-        ADMIN_AVAILABLE = False
+# Import admin API routes
+ADMIN_AVAILABLE = False
+try:
+    from admin.api import app as admin_app
+    from fastapi.routing import APIRoute
+    # Include admin routes manually with /admin prefix
+    for route in admin_app.routes:
+        if isinstance(route, APIRoute):
+            new_route = APIRoute(
+                path=f"/admin{route.path}",
+                endpoint=route.endpoint,
+                methods=route.methods,
+                name=f"admin_{route.name}" if route.name else None,
+                dependencies=route.dependencies
+            )
+            app.routes.append(new_route)
+    ADMIN_AVAILABLE = True
+    logger.info("✅ Admin API routes included at /admin")
+except Exception as e:
+    logger.warning(f"⚠️ Admin API not available: {e}")
+    ADMIN_AVAILABLE = False
+
 
 
 @app.get("/")
