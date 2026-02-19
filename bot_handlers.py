@@ -20,9 +20,9 @@ class States:
     PROCESSING_FILE, WAITING_FOLLOW_UP = "processing_file", "waiting_follow_up"
     ADMIN_WAIT_ID, ADMIN_WAIT_USERNAME = "admin_wait_id", "admin_wait_username"
 
-MSG_NEED_START = "Send /start first."
-MSG_NEED_SUB = "Subscription required."
-MSG_ERR = "Error. Try again."
+MSG_NEED_START = "👋 Сначала отправьте /start"
+MSG_NEED_SUB = "💳 Для действия нужна активная подписка"
+MSG_ERR = "❌ Ошибка. Попробуйте снова."
 
 
 class BotHandlers:
@@ -59,15 +59,15 @@ class BotHandlers:
 
     async def admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not update.message or update.effective_user.id != ADMIN_ID:
-            await update.message.reply_text("Нет доступа.")
+            await update.message.reply_text("🔒 Нет доступа.")
             return
         await self._admin_dashboard(update)
 
     async def _admin_dashboard(self, update: Update):
-        text = "Админ-панель. Выберите действие:"
+        text = "🔧 Админ-панель\n\n👇 Выберите действие:"
         kb = [
-            [InlineKeyboardButton("Поиск по ID", callback_data="admin_search_id")],
-            [InlineKeyboardButton("Поиск по username", callback_data="admin_search_username")],
+            [InlineKeyboardButton("🔍 Поиск по ID", callback_data="admin_search_id")],
+            [InlineKeyboardButton("👤 Поиск по username", callback_data="admin_search_username")],
         ]
         if update.callback_query:
             await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
@@ -77,22 +77,23 @@ class BotHandlers:
     async def _admin_user_card(self, update: Update, user: User):
         exp = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "—"
         uname = getattr(user, "username", None) or "—"
+        status_emoji = "✅" if user.subscription_status == "active" else "❌" if user.subscription_status == "inactive" else "⏰"
         text = (
-            f"Пользователь\n\n"
-            f"ID (в боте): {user.id}\n"
-            f"Telegram ID: {user.telegram_id}\n"
-            f"Username: @{uname}\n"
-            f"Подписка: {user.subscription_status}\n"
-            f"Активна до: {exp}\n"
-            f"Запросы: тариф {user.total_requests or 0}, бонус {user.bonus_requests or 0}, использовано {user.used_requests or 0}"
+            f"👤 Пользователь\n\n"
+            f"🆔 ID в боте: {user.id}\n"
+            f"📱 Telegram ID: {user.telegram_id}\n"
+            f"👤 Username: @{uname}\n"
+            f"💳 Подписка: {status_emoji} {user.subscription_status}\n"
+            f"📅 Активна до: {exp}\n"
+            f"📊 Запросы: тариф {user.total_requests or 0}, бонус {user.bonus_requests or 0}, использовано {user.used_requests or 0}"
         )
         kb = [
             [
-                InlineKeyboardButton("Выдать 1 мес", callback_data=f"admin_grant_1m_{user.id}"),
-                InlineKeyboardButton("Выдать 3 мес", callback_data=f"admin_grant_3m_{user.id}"),
+                InlineKeyboardButton("✅ Выдать 1 мес", callback_data=f"admin_grant_1m_{user.id}"),
+                InlineKeyboardButton("✅ Выдать 3 мес", callback_data=f"admin_grant_3m_{user.id}"),
             ],
-            [InlineKeyboardButton("Убрать подписку", callback_data=f"admin_remove_{user.id}")],
-            [InlineKeyboardButton("Назад", callback_data="admin_back")],
+            [InlineKeyboardButton("🚫 Убрать подписку", callback_data=f"admin_remove_{user.id}")],
+            [InlineKeyboardButton("⬅ Назад", callback_data="admin_back")],
         ]
         await self._reply(update, text, kb)
 
@@ -122,8 +123,8 @@ class BotHandlers:
         await self._show_terms(update)
 
     async def _show_terms(self, update: Update):
-        text = """Welcome. Lab results interpretation (informational only, not a diagnosis). 18+. By continuing you agree to the terms."""
-        kb = [[InlineKeyboardButton("Terms", callback_data="terms")], [InlineKeyboardButton("Accept", callback_data="accept_terms")]]
+        text = "🔬 Добро пожаловать в Pulse.\n\nИнтерпретация лабораторных результатов — только в информационных целях, не является диагнозом. 18+.\n\nПродолжая, вы соглашаетесь с условиями."
+        kb = [[InlineKeyboardButton("📄 Условия", callback_data="terms")], [InlineKeyboardButton("✅ Принимаю", callback_data="accept_terms")]]
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
         FSMStorage.set_state(update.effective_user.id, States.START)
 
@@ -138,11 +139,11 @@ class BotHandlers:
                 return
             if data == "admin_search_id":
                 FSMStorage.set_state(uid, States.ADMIN_WAIT_ID)
-                await q.edit_message_text("Введите Telegram ID пользователя (число):")
+                await q.edit_message_text("🔢 Введите Telegram ID пользователя (число):")
                 return
             if data == "admin_search_username":
                 FSMStorage.set_state(uid, States.ADMIN_WAIT_USERNAME)
-                await q.edit_message_text("Введите username без @:")
+                await q.edit_message_text("👤 Введите username без @:")
                 return
             if data.startswith("admin_grant_1m_"):
                 try:
@@ -151,9 +152,9 @@ class BotHandlers:
                         user = self.db.query(User).filter(User.id == target_id).first()
                         await self._admin_user_card(update, user)
                     else:
-                        await self._reply(update, "Ошибка выдачи подписки.")
+                        await self._reply(update, "❌ Ошибка выдачи подписки.")
                 except (ValueError, AttributeError):
-                    await self._reply(update, "Ошибка.")
+                    await self._reply(update, "❌ Ошибка.")
                 return
             if data.startswith("admin_grant_3m_"):
                 try:
@@ -162,9 +163,9 @@ class BotHandlers:
                         user = self.db.query(User).filter(User.id == target_id).first()
                         await self._admin_user_card(update, user)
                     else:
-                        await self._reply(update, "Ошибка выдачи подписки.")
+                        await self._reply(update, "❌ Ошибка выдачи подписки.")
                 except (ValueError, AttributeError):
-                    await self._reply(update, "Ошибка.")
+                    await self._reply(update, "❌ Ошибка.")
                 return
             if data.startswith("admin_remove_"):
                 try:
@@ -173,13 +174,13 @@ class BotHandlers:
                         user = self.db.query(User).filter(User.id == target_id).first()
                         await self._admin_user_card(update, user)
                     else:
-                        await self._reply(update, "Ошибка.")
+                        await self._reply(update, "❌ Ошибка.")
                 except (ValueError, AttributeError):
-                    await self._reply(update, "Ошибка.")
+                    await self._reply(update, "❌ Ошибка.")
                 return
 
         if data == "terms":
-            await q.edit_message_text("Terms: informational use only, not diagnosis. 18+. Data retention 60 days.")
+            await q.edit_message_text("📄 Условия использования\n\nИнформационная интерпретация анализов, не диагноз. 18+. Хранение данных до 60 дней.")
         elif data == "accept_terms":
             FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
             await self._main_menu(update)
@@ -188,9 +189,9 @@ class BotHandlers:
             await self._main_menu(update)
         elif data == "about":
             await q.edit_message_text(
-                "О сервисе\n\n"
-                "Интерпретация лабораторных результатов. Загрузка PDF/фото, отчёт, сравнение, уточняющие вопросы. "
-                "Только в информационных целях, не заменяет консультацию врача."
+                "ℹ️ О сервисе\n\n"
+                "🔬 Интерпретация лабораторных результатов: загрузка PDF/фото → отчёт, сравнение анализов, уточняющие вопросы.\n\n"
+                "⚠️ Только в информационных целях, не заменяет консультацию врача."
             )
         elif data == "subscription":
             await self._subscription_status(update)
@@ -240,7 +241,7 @@ class BotHandlers:
                 [InlineKeyboardButton("🎁 Программа лояльности", callback_data="loyalty")],
                 [InlineKeyboardButton("ℹ️ О сервисе", callback_data="about")],
             ]
-        msg = "Выберите действие:"
+        msg = "👇 Выберите действие:"
         if update.callback_query:
             await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
         else:
@@ -252,39 +253,39 @@ class BotHandlers:
             exp = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "—"
             av, tot, bon, _ = SubscriptionManager.get_available_requests(user)
             text = (
-                "Статус подписки\n\n"
-                f"Активна до: {exp}\n"
-                f"Доступно запросов: {av} из {tot}\n"
-                f"Бонусные запросы: +{bon}"
+                "💳 Статус подписки\n\n"
+                f"📅 Активна до: {exp}\n"
+                f"📊 Доступно запросов: {av} из {tot}\n"
+                f"🎁 Бонусные запросы: +{bon}"
             )
             kb = [
-                [InlineKeyboardButton("Продлить подписку", callback_data="subscription_plans")],
+                [InlineKeyboardButton("🔄 Продлить подписку", callback_data="subscription_plans")],
                 [InlineKeyboardButton("⬅ Назад", callback_data="back_menu")],
             ]
         else:
-            text = "Для доступа к анализам нужна активная подписка."
+            text = "💳 Подписка\n\n🔒 Для доступа к анализам нужна активная подписка."
             kb = [
-                [InlineKeyboardButton("Оформить подписку", callback_data="subscription_plans")],
+                [InlineKeyboardButton("✅ Оформить подписку", callback_data="subscription_plans")],
                 [InlineKeyboardButton("⬅ Назад", callback_data="back_menu")],
             ]
         await self._reply(update, text, kb)
 
     async def _subscription_plans(self, update: Update):
         kb = [
-            [InlineKeyboardButton("1 мес — 299 ₽", callback_data="plan_1month")],
-            [InlineKeyboardButton("3 мес — 799 ₽", callback_data="plan_3months")],
-            [InlineKeyboardButton("6 мес — 1399 ₽", callback_data="plan_6months")],
-            [InlineKeyboardButton("12 мес — 2499 ₽", callback_data="plan_12months")],
+            [InlineKeyboardButton("📅 1 мес — 299 ₽", callback_data="plan_1month")],
+            [InlineKeyboardButton("📅 3 мес — 799 ₽", callback_data="plan_3months")],
+            [InlineKeyboardButton("📅 6 мес — 1399 ₽", callback_data="plan_6months")],
+            [InlineKeyboardButton("📅 12 мес — 2499 ₽", callback_data="plan_12months")],
             [InlineKeyboardButton("⬅ Назад", callback_data="subscription")],
         ]
-        await update.callback_query.edit_message_text("Выберите тариф:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.callback_query.edit_message_text("💳 Выберите тариф:", reply_markup=InlineKeyboardMarkup(kb))
 
     async def _loyalty(self, update: Update):
         text = (
-            "Программа лояльности Pulse\n\n"
-            "Если пользователь оформит подписку по вашей персональной ссылке, "
-            "вам начисляется 5 дополнительных запросов за каждую оплату.\n\n"
-            "Бонус действует в рамках активной подписки."
+            "🎁 Программа лояльности Pulse\n\n"
+            "🔗 Если пользователь оформит подписку по вашей персональной ссылке, "
+            "вам начисляется ➕5 дополнительных запросов за каждую оплату.\n\n"
+            "⏰ Бонус действует в рамках активной подписки."
         )
         kb = [
             [InlineKeyboardButton("🔗 Получить персональную ссылку", callback_data="get_referral_link")],
@@ -302,14 +303,14 @@ class BotHandlers:
             self.db.commit()
         bot = await context.bot.get_me()
         link = f"https://t.me/{bot.username}?start={user.referral_code}"
-        await self._reply(update, f"Ваша ссылка:\n{link}", [[InlineKeyboardButton("⬅ Назад", callback_data="loyalty")]])
+        await self._reply(update, f"🔗 Ваша персональная ссылка:\n\n{link}", [[InlineKeyboardButton("⬅ Назад", callback_data="loyalty")]])
 
     async def _referral_stats(self, update: Update):
         user = await self._ensure_user(update)
         if not user:
             return
         s = SubscriptionManager.get_referral_stats(self.db, user.id)
-        text = f"Рефералов: {s['total_referrals']}. Бонусных запросов: {s['total_bonus']}."
+        text = f"📊 Статистика начислений\n\n👥 Рефералов: {s['total_referrals']}\n🎁 Бонусных запросов: {s['total_bonus']}"
         await self._reply(update, text, [[InlineKeyboardButton("⬅ Назад", callback_data="loyalty")]])
 
     async def _upload_request(self, update: Update):
@@ -319,7 +320,7 @@ class BotHandlers:
         if not SubscriptionManager.can_perform_analysis(self.db, user.id):
             await self._reply(update, MSG_NEED_SUB, [[InlineKeyboardButton("💳 Подписка", callback_data="subscription")]])
             return
-        await update.callback_query.edit_message_text("Отправьте файл: PDF, JPG или PNG.")
+        await update.callback_query.edit_message_text("📤 Загрузка анализа\n\n📎 Отправьте файл: PDF, JPG или PNG.")
         FSMStorage.set_state(update.effective_user.id, States.PROCESSING_FILE)
 
     async def handle_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -344,13 +345,13 @@ class BotHandlers:
             file = await context.bot.get_file(doc.file_id)
             mime = "image/jpeg"
         else:
-            await update.message.reply_text("Send a file (PDF/JPG/PNG).")
+            await update.message.reply_text("📎 Отправьте файл (PDF, JPG или PNG).")
             return
         buf = bytes(await file.download_as_bytearray())
-        await update.message.reply_text("Processing…")
+        await update.message.reply_text("⏳ Обработка файла…")
         try:
             if not self.file_processor or not self.llm_service or not getattr(self.llm_service, "enabled", True):
-                await update.message.reply_text("Service unavailable.")
+                await update.message.reply_text("⚠️ Сервис временно недоступен.")
                 FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
                 return
             raw = self.file_processor.process_file(buf, mime)
@@ -366,7 +367,7 @@ class BotHandlers:
             fsm["session_id"] = session.id
             fsm["structured_data"] = data
             FSMStorage.set_data(uid, fsm)
-            await update.message.reply_text("Context: 1) Age?")
+            await update.message.reply_text("📋 Контекст для отчёта\n\n1️⃣ Укажите возраст:")
             FSMStorage.set_state(uid, States.COLLECTING_AGE)
         except Exception as e:
             logger.error(f"File: {e}")
@@ -387,58 +388,58 @@ class BotHandlers:
                 if user:
                     await self._admin_user_card(update, user)
                 else:
-                    await update.message.reply_text("Пользователь не найден.")
+                    await update.message.reply_text("🔍 Пользователь не найден.")
             except ValueError:
-                await update.message.reply_text("Введите число (Telegram ID).")
+                await update.message.reply_text("🔢 Введите число (Telegram ID).")
             return
         if self._is_admin(uid) and state == States.ADMIN_WAIT_USERNAME:
             FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
             name = text.lstrip("@").strip().lower()
             if not name:
-                await update.message.reply_text("Введите username.")
+                await update.message.reply_text("👤 Введите username.")
                 return
             user = self.db.query(User).filter(User.username.ilike(name)).first()
             if user:
                 await self._admin_user_card(update, user)
             else:
-                await update.message.reply_text("Пользователь не найден.")
+                await update.message.reply_text("🔍 Пользователь не найден.")
             return
 
         if state == States.COLLECTING_AGE:
             fsm["age"] = text
             FSMStorage.set_data(uid, fsm)
             FSMStorage.set_state(uid, States.COLLECTING_SEX)
-            await update.message.reply_text("2) Sex?")
+            await update.message.reply_text("2️⃣ Пол?")
         elif state == States.COLLECTING_SEX:
             fsm["sex"] = text
             FSMStorage.set_data(uid, fsm)
             FSMStorage.set_state(uid, States.COLLECTING_SYMPTOMS)
-            await update.message.reply_text("3) Symptoms?")
+            await update.message.reply_text("3️⃣ Жалобы или симптомы?")
         elif state == States.COLLECTING_SYMPTOMS:
             fsm["symptoms"] = text
             FSMStorage.set_data(uid, fsm)
             if (fsm.get("sex") or "").lower() in ("female", "f", "женский"):
                 FSMStorage.set_state(uid, States.COLLECTING_PREGNANCY)
-                await update.message.reply_text("4) Pregnant?")
+                await update.message.reply_text("4️⃣ Беременность?")
             else:
                 fsm["pregnancy"] = "N/A"
                 FSMStorage.set_data(uid, fsm)
                 FSMStorage.set_state(uid, States.COLLECTING_CHRONIC)
-                await update.message.reply_text("4) Chronic conditions?")
+                await update.message.reply_text("4️⃣ Хронические заболевания?")
         elif state == States.COLLECTING_PREGNANCY:
             fsm["pregnancy"] = text
             FSMStorage.set_data(uid, fsm)
             FSMStorage.set_state(uid, States.COLLECTING_CHRONIC)
-            await update.message.reply_text("5) Chronic conditions?")
+            await update.message.reply_text("5️⃣ Хронические заболевания?")
         elif state == States.COLLECTING_CHRONIC:
             fsm["chronic_conditions"] = text
             FSMStorage.set_data(uid, fsm)
             FSMStorage.set_state(uid, States.COLLECTING_MEDICATIONS)
-            await update.message.reply_text("6) Medications?")
+            await update.message.reply_text("6️⃣ Принимаемые препараты?")
         elif state == States.COLLECTING_MEDICATIONS:
             fsm["medications"] = text
             FSMStorage.set_data(uid, fsm)
-            await update.message.reply_text("Generating…")
+            await update.message.reply_text("⏳ Формирую отчёт…")
             user = self._user(uid)
             if not user or not SubscriptionManager.can_perform_analysis(self.db, user.id):
                 await update.message.reply_text(MSG_NEED_SUB)
@@ -449,7 +450,7 @@ class BotHandlers:
             ctx = {k: fsm.get(k) for k in ("age", "sex", "symptoms", "pregnancy", "chronic_conditions", "medications")}
             try:
                 if not self.llm_service or not getattr(self.llm_service, "enabled", True):
-                    await update.message.reply_text("Service unavailable.")
+                    await update.message.reply_text("⚠️ Сервис временно недоступен.")
                     FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
                     return
                 report = self.llm_service.generate_clinical_report(fsm["structured_data"], ctx)
@@ -461,7 +462,7 @@ class BotHandlers:
                 SubscriptionManager.use_request(self.db, user.id)
                 from cleanup import cleanup_user_analyses
                 cleanup_user_analyses(user.id, keep_count=3)
-                await update.message.reply_text(f"Отчёт:\n\n{report}")
+                await update.message.reply_text(f"📋 Отчёт:\n\n{report}")
                 kb = [
                     [
                         InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{sid}"),
@@ -469,7 +470,7 @@ class BotHandlers:
                     ],
                     [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
                 ]
-                await update.message.reply_text("Выберите действие:", reply_markup=InlineKeyboardMarkup(kb))
+                await update.message.reply_text("👇 Выберите действие:", reply_markup=InlineKeyboardMarkup(kb))
                 fsm["current_session_id"] = sid
                 fsm["follow_up_count"] = 0
                 FSMStorage.set_data(uid, fsm)
@@ -481,21 +482,21 @@ class BotHandlers:
         elif state == States.WAITING_FOLLOW_UP:
             n = fsm.get("follow_up_count", 0)
             if n >= 2:
-                await update.message.reply_text("Limit 2 questions.")
+                await update.message.reply_text("⚠️ Лимит: 2 уточняющих вопроса.")
                 await self._main_menu(update)
                 FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
                 return
             sid = fsm.get("current_session_id") or fsm.get("session_id")
             if not sid:
-                await update.message.reply_text("Session lost.")
+                await update.message.reply_text("❌ Сессия потеряна.")
                 return
             res = self.db.query(StructuredResult).filter(StructuredResult.session_id == sid).first()
             if not res:
-                await update.message.reply_text("Not found.")
+                await update.message.reply_text("❌ Анализ не найден.")
                 return
             try:
                 if not self.llm_service or not getattr(self.llm_service, "enabled", True):
-                    await update.message.reply_text("Service unavailable.")
+                    await update.message.reply_text("⚠️ Сервис временно недоступен.")
                     return
                 ans = self.llm_service.answer_follow_up_question(res.structured_json, res.clinical_context or {}, res.report or "", text)
                 self.db.add(FollowUpQuestion(session_id=sid, question=text, answer=ans))
@@ -512,7 +513,7 @@ class BotHandlers:
                         [InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{sid}")],
                         [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
                     ]
-                    await update.message.reply_text(f"Можно задать ещё вопросов: {left}.", reply_markup=InlineKeyboardMarkup(kb))
+                    await update.message.reply_text(f"❓ Можно задать ещё вопросов: {left}.", reply_markup=InlineKeyboardMarkup(kb))
             except Exception as e:
                 logger.error(f"Follow-up: {e}")
                 await update.message.reply_text(MSG_ERR)
@@ -530,18 +531,18 @@ class BotHandlers:
         data = update.callback_query.data
         sid = int(data.replace("follow_up_", "")) if data.startswith("follow_up_") else (FSMStorage.get_data(uid).get("current_session_id") or FSMStorage.get_data(uid).get("session_id"))
         if not sid:
-            await self._reply(update, "Session not found.")
+            await self._reply(update, "❌ Анализ не найден.")
             return
         n = FSMStorage.get_data(uid).get("follow_up_count", 0)
         if n >= 2:
-            await self._reply(update, "Limit 2 questions.")
+            await self._reply(update, "⚠️ Лимит: 2 уточняющих вопроса.")
             await self._main_menu(update)
             return
         fsm = FSMStorage.get_data(uid)
         fsm["current_session_id"] = sid
         FSMStorage.set_data(uid, fsm)
         FSMStorage.set_state(uid, States.WAITING_FOLLOW_UP)
-        await self._reply(update, f"Ask (up to {2 - n} more).")
+        await self._reply(update, f"❓ Задайте вопрос (осталось {2 - n}).")
 
     async def _payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, plan: str):
         user = await self._ensure_user(update)
@@ -549,7 +550,7 @@ class BotHandlers:
             return
         try:
             info = PaymentService.create_payment(user.id, plan, self.db)
-            await update.callback_query.edit_message_text(f"Pay: {info.get('confirmation_url', '')}")
+            await update.callback_query.edit_message_text(f"💳 Оплата\n\nПерейдите по ссылке:\n{info.get('confirmation_url', '')}")
         except Exception as e:
             logger.error(f"Payment: {e}")
             await update.callback_query.edit_message_text(MSG_ERR)
@@ -563,16 +564,16 @@ class BotHandlers:
             return
         sessions = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if not sessions:
-            await self._reply(update, "Нет сохранённых анализов.", [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
+            await self._reply(update, "📁 Нет сохранённых анализов.", [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
             return
         lines = []
         kb = []
         for s in sessions:
             d = s.created_at.strftime("%Y-%m-%d %H:%M")
             lines.append(d)
-            kb.append([InlineKeyboardButton(d, callback_data=f"analysis_{s.id}")])
+            kb.append([InlineKeyboardButton(f"📋 {d}", callback_data=f"analysis_{s.id}")])
         kb.append([InlineKeyboardButton("⬅ Назад", callback_data="back_menu")])
-        await self._reply(update, "Последние анализы (выберите — покажу краткое содержание):\n\n" + "\n".join(lines), kb)
+        await self._reply(update, "📁 Мои анализы\n\n👇 Выберите анализ — покажу краткое содержание:\n\n" + "\n".join(lines), kb)
 
     async def _analysis_detail(self, update: Update, session_id: int):
         user = await self._ensure_user(update)
@@ -583,11 +584,11 @@ class BotHandlers:
             return
         session = self.db.query(AnalysisSession).filter(AnalysisSession.id == session_id, AnalysisSession.user_id == user.id).first()
         if not session:
-            await self._reply(update, "Not found.")
+            await self._reply(update, "❌ Анализ не найден.")
             return
         res = self.db.query(StructuredResult).filter(StructuredResult.session_id == session_id).first()
         if not res or not res.report:
-            await self._reply(update, "Анализ не найден.")
+            await self._reply(update, "❌ Анализ не найден.")
             return
         summary = (res.report[:500] + "…") if len(res.report) > 500 else res.report
         kb = [
@@ -597,7 +598,7 @@ class BotHandlers:
             ],
             [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
         ]
-        await self._reply(update, f"Кратко:\n\n{summary}", kb)
+        await self._reply(update, f"📋 Краткое содержание\n\n{summary}", kb)
 
     async def _compare_request(self, update: Update):
         user = await self._ensure_user(update)
@@ -608,15 +609,15 @@ class BotHandlers:
             return
         sessions = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if len(sessions) < 2:
-            await self._reply(update, "Нужно минимум 2 анализа для сравнения.", [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
+            await self._reply(update, "📊 Нужно минимум 2 анализа для сравнения.", [[InlineKeyboardButton("⬅ Назад", callback_data="back_menu")]])
             return
         kb = []
         for i in range(min(2, len(sessions))):
             for j in range(i + 1, min(3, len(sessions))):
                 a, b = sessions[i], sessions[j]
-                kb.append([InlineKeyboardButton(f"{a.created_at.strftime('%Y-%m-%d')} и {b.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{a.id}_{b.id}")])
+                kb.append([InlineKeyboardButton(f"📊 {a.created_at.strftime('%Y-%m-%d')} и {b.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{a.id}_{b.id}")])
         kb.append([InlineKeyboardButton("⬅ Назад", callback_data="back_menu")])
-        await self._reply(update, "Выберите два анализа для сравнения:", kb)
+        await self._reply(update, "📊 Сравнение анализов\n\n👇 Выберите два анализа:", kb)
 
     async def _compare_from(self, update: Update, session_id: int):
         user = await self._ensure_user(update)
@@ -627,15 +628,15 @@ class BotHandlers:
             return
         current = self.db.query(AnalysisSession).filter(AnalysisSession.id == session_id, AnalysisSession.user_id == user.id).first()
         if not current:
-            await self._reply(update, "Not found.")
+            await self._reply(update, "❌ Анализ не найден.")
             return
         others = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id, AnalysisSession.id != session_id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if not others:
-            await self._reply(update, "Нужен ещё один анализ для сравнения.", [[InlineKeyboardButton("⬅ Назад", callback_data=f"analysis_{session_id}")]])
+            await self._reply(update, "📊 Нужен ещё один анализ для сравнения.", [[InlineKeyboardButton("⬅ Назад", callback_data=f"analysis_{session_id}")]])
             return
         kb = [[InlineKeyboardButton(f"📊 с {s.created_at.strftime('%Y-%m-%d')}", callback_data=f"compare_{session_id}_{s.id}")] for s in others]
         kb.append([InlineKeyboardButton("⬅ Назад", callback_data=f"analysis_{session_id}")])
-        await self._reply(update, "Сравнить с:", kb)
+        await self._reply(update, "📊 Сравнить с:", kb)
 
     async def _do_compare(self, update: Update, context: ContextTypes.DEFAULT_TYPE, session_ids: list):
         user = await self._ensure_user(update)
@@ -648,17 +649,17 @@ class BotHandlers:
         s1 = self.db.query(AnalysisSession).filter(AnalysisSession.id == s1_id, AnalysisSession.user_id == user.id).first()
         s2 = self.db.query(AnalysisSession).filter(AnalysisSession.id == s2_id, AnalysisSession.user_id == user.id).first()
         if not s1 or not s2:
-            await self._reply(update, "Not found.")
+            await self._reply(update, "❌ Анализы не найдены.")
             return
         r1 = self.db.query(StructuredResult).filter(StructuredResult.session_id == s1_id).first()
         r2 = self.db.query(StructuredResult).filter(StructuredResult.session_id == s2_id).first()
         if not r1 or not r2:
-            await self._reply(update, "Not found.")
+            await self._reply(update, "❌ Анализы не найдены.")
             return
-        await update.callback_query.edit_message_text("Comparing…")
+        await update.callback_query.edit_message_text("⏳ Сравниваю анализы…")
         try:
             if not self.llm_service or not getattr(self.llm_service, "enabled", True):
-                await self._reply(update, "Service unavailable.")
+                await self._reply(update, "⚠️ Сервис временно недоступен.")
                 return
             c1 = dict(r1.clinical_context or {})
             c1["date"] = s1.created_at.strftime("%Y-%m-%d")
