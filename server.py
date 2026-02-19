@@ -39,7 +39,14 @@ async def root():
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "ok"}
+    # Check if bot is initialized (optional check)
+    bot_initialized = hasattr(app.state, 'bot_application') and app.state.bot_application is not None
+    
+    return {
+        "status": "ok",
+        "service": "Pulse Bot",
+        "bot_initialized": bot_initialized
+    }
 
 
 @app.post("/webhook/yookassa")
@@ -91,10 +98,19 @@ def run_server(bot_app: Application, host: str = "0.0.0.0", port: int = 8000):
     """Run unified server."""
     setup_bot_application(bot_app)
     
-    logger.info(f"Starting unified server on {host}:{port}")
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        log_level="info"
-    )
+    logger.info(f"🚀 Starting unified server on {host}:{port}")
+    logger.info(f"📡 Health check available at: http://{host}:{port}/health")
+    logger.info(f"📨 Telegram webhook: http://{host}:{port}/telegram-webhook")
+    logger.info(f"💳 YooKassa webhook: http://{host}:{port}/webhook/yookassa")
+    
+    try:
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level="info",
+            access_log=True
+        )
+    except Exception as e:
+        logger.error(f"❌ Server startup error: {e}")
+        raise
