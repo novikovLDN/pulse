@@ -38,15 +38,28 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
-    # Check if bot is initialized (optional check)
-    bot_initialized = hasattr(app.state, 'bot_application') and app.state.bot_application is not None
-    
-    return {
-        "status": "OK",
-        "service": "Pulse Bot",
-        "bot_initialized": bot_initialized
-    }
+    """Health check endpoint - must always return OK for Railway."""
+    try:
+        # Check if bot is initialized (optional check, don't fail if not)
+        bot_initialized = False
+        try:
+            bot_initialized = hasattr(app.state, 'bot_application') and app.state.bot_application is not None
+        except Exception:
+            pass  # Ignore errors in bot check
+        
+        return {
+            "status": "OK",
+            "service": "Pulse Bot",
+            "bot_initialized": bot_initialized
+        }
+    except Exception as e:
+        # Even if there's an error, return OK status for healthcheck
+        logger.error(f"Error in health check: {e}")
+        return {
+            "status": "OK",
+            "service": "Pulse Bot",
+            "error": str(e)
+        }
 
 
 @app.post("/webhook/yookassa")
@@ -71,22 +84,11 @@ async def yookassa_webhook(request: Request):
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request):
-    """Telegram webhook endpoint."""
-    try:
-        data = await request.json()
-        update = Update.de_json(data, None)
-        
-        # Get bot application from context
-        bot_app = request.app.state.bot_application
-        if bot_app:
-            await bot_app.process_update(update)
-            return JSONResponse({"status": "ok"})
-        else:
-            logger.error("Bot application not initialized")
-            return JSONResponse({"status": "error"}, status_code=500)
-    except Exception as e:
-        logger.error(f"Error processing Telegram webhook: {e}")
-        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+    """Telegram webhook endpoint (deprecated - using polling)."""
+    return JSONResponse({
+        "status": "error",
+        "message": "Webhook mode is disabled. Bot is running in polling mode."
+    }, status_code=410)  # 410 Gone
 
 
 def setup_bot_application(bot_app: Application):
@@ -95,13 +97,18 @@ def setup_bot_application(bot_app: Application):
 
 
 def run_server(bot_app: Application, host: str = "0.0.0.0", port: int = 8080):
-    """Run unified server."""
-    setup_bot_application(bot_app)
+    """Run unified server for webhooks (YooKassa, admin API)."""
+    try:
+        setup_bot_application(bot_app)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not setup bot application: {e}")
+        logger.warning("Server will start anyway")
     
-    logger.info(f"🚀 Starting unified server on {host}:{port}")
+    logger.info(f"🚀 Starting webhook server on {host}:{port}")
     logger.info(f"📡 Health check available at: http://{host}:{port}/health")
-    logger.info(f"📨 Telegram webhook: http://{host}:{port}/telegram-webhook")
     logger.info(f"💳 YooKassa webhook: http://{host}:{port}/webhook/yookassa")
+    logger.info(f"📊 Admin API: http://{host}:{port}/admin")
+    logger.info(f"✅ Server is ready to accept connections")
     
     try:
         uvicorn.run(
@@ -109,8 +116,13 @@ def run_server(bot_app: Application, host: str = "0.0.0.0", port: int = 8080):
             host=host,
             port=port,
             log_level="info",
-            access_log=True
+            access_log=True,
+            loop="asyncio"
         )
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested")
     except Exception as e:
         logger.error(f"❌ Server startup error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise

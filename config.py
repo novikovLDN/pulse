@@ -21,17 +21,17 @@ class Settings(BaseSettings):
     redis_db: int = 0
     
     # OpenAI
-    openai_api_key: str
+    openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
     openai_premium_model: str = "gpt-4o"
     
     # YooKassa
-    yookassa_shop_id: str
-    yookassa_secret_key: str
-    yookassa_return_url: str
+    yookassa_shop_id: Optional[str] = None
+    yookassa_secret_key: Optional[str] = None
+    yookassa_return_url: Optional[str] = None
     
     # Admin
-    admin_secret_key: str
+    admin_secret_key: Optional[str] = None
     
     # App
     environment: str = "production"

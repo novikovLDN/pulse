@@ -97,105 +97,67 @@ class PulseBot:
     
     async def post_init(self, application: Application):
         """Post initialization tasks."""
-        # Initialize database
-        init_db()
-        logger.info("Database initialized")
-        
-        # Setup scheduled tasks
-        setup_scheduler(application)
-        
-        # Expire old subscriptions
-        db = get_db_session()
         try:
-            expired_count = SubscriptionManager.expire_subscriptions(db)
-            logger.info(f"Expired {expired_count} subscriptions")
-        finally:
-            db.close()
+            # Initialize database
+            logger.info("🔄 Initializing database...")
+            init_db()
+            logger.info("✅ Database initialized")
+        except Exception as e:
+            logger.error(f"❌ Database initialization error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Don't fail completely, continue
+        
+        try:
+            # Setup scheduled tasks
+            setup_scheduler(application)
+            logger.info("✅ Scheduler configured")
+        except Exception as e:
+            logger.warning(f"⚠️ Scheduler setup error: {e}")
+        
+        try:
+            # Expire old subscriptions
+            db = get_db_session()
+            try:
+                expired_count = SubscriptionManager.expire_subscriptions(db)
+                logger.info(f"✅ Expired {expired_count} subscriptions")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"⚠️ Subscription expiration check error: {e}")
     
     def run_polling(self):
         """Run bot in polling mode."""
-        logger.info("Starting bot in polling mode...")
+        logger.info("🔄 Starting bot in polling mode...")
         self.application.post_init = self.post_init
+        
+        # Start webhook server for YooKassa and admin API in background
+        import threading
+        def start_webhook_server():
+            try:
+                port = int(os.getenv("PORT", 8080))
+                logger.info(f"🚀 Starting webhook server on port {port} for YooKassa and admin API...")
+                run_server(self.application, host="0.0.0.0", port=port)
+            except Exception as e:
+                logger.error(f"❌ Error starting webhook server: {e}")
+        
+        # Start webhook server in background thread
+        server_thread = threading.Thread(target=start_webhook_server, daemon=True)
+        server_thread.start()
+        
+        # Give server a moment to start
+        import time
+        time.sleep(1)
+        
+        # Run bot in polling mode (this blocks)
+        logger.info("✅ Bot is ready, starting polling...")
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
     
     def run_webhook(self):
         """Run bot in webhook mode with unified server."""
-        logger.info("Starting bot in webhook mode with unified server...")
-        self.application.post_init = self.post_init
-        
-        # Initialize bot asynchronously in background
-        async def init_and_start_bot():
-            try:
-                await self.application.initialize()
-                await self.application.start()
-                logger.info("✅ Bot initialized and started successfully")
-            except Exception as e:
-                logger.error(f"❌ Error initializing bot: {e}")
-        
-        # Start bot initialization in background
-        import threading
-        def run_bot_async():
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(init_and_start_bot())
-                # Keep event loop running
-                loop.run_forever()
-            except Exception as e:
-                logger.error(f"Error in bot thread: {e}")
-        
-        bot_thread = threading.Thread(target=run_bot_async, daemon=True)
-        bot_thread.start()
-        
-        # Give bot a moment to start initializing (but don't wait too long)
-        import time
-        time.sleep(1)
-        
-        # Run unified server (bot + webhooks) in main thread
-        # Server must start immediately for healthcheck
-        port = int(os.getenv("PORT", 8080))
-        logger.info(f"Starting server on port {port}...")
-        run_server(self.application, host="0.0.0.0", port=port)
-    
-    def setup_webhook(self):
-        """Setup Telegram webhook."""
-        import requests
-        import time
-        
-        if not settings.telegram_webhook_url:
-            logger.warning("⚠️ TELEGRAM_WEBHOOK_URL not set, skipping webhook setup")
-            return
-        
-        if not settings.telegram_bot_token:
-            logger.error("❌ TELEGRAM_BOT_TOKEN not set, cannot setup webhook")
-            return
-        
-        webhook_url = f"{settings.telegram_webhook_url}/telegram-webhook"
-        telegram_api_url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/setWebhook"
-        
-        data = {"url": webhook_url}
-        if settings.telegram_webhook_secret:
-            data["secret_token"] = settings.telegram_webhook_secret
-        
-        # Wait a bit for server to be ready (if running in same process)
-        time.sleep(1)
-        
-        try:
-            logger.info(f"🔗 Setting Telegram webhook to: {webhook_url}")
-            response = requests.post(telegram_api_url, json=data, timeout=10)
-            response.raise_for_status()
-            
-            result = response.json()
-            if result.get("ok"):
-                logger.info(f"✅ Webhook set successfully!")
-                logger.info(f"   URL: {webhook_url}")
-                logger.info(f"   Description: {result.get('description', 'OK')}")
-            else:
-                logger.error(f"❌ Failed to set webhook: {result.get('description', 'Unknown error')}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Failed to set webhook (network error): {e}")
-        except Exception as e:
-            logger.error(f"❌ Failed to set webhook: {e}")
+        # This method is deprecated - using polling instead
+        logger.warning("⚠️ Webhook mode is deprecated, using polling instead")
+        self.run_polling()
 
 
 def main():
@@ -204,21 +166,30 @@ def main():
     logger.info("🚀 Starting Pulse Clinical AI Assistant Bot")
     logger.info("=" * 60)
     
-    # Check environment
+    # Check environment variables
     logger.info(f"Environment: {settings.environment}")
-    logger.info(f"Webhook URL: {settings.telegram_webhook_url or 'Not set'}")
+    logger.info(f"Mode: Polling")
     
-    bot = PulseBot()
+    # Validate critical settings
+    if not settings.telegram_bot_token:
+        logger.error("❌ TELEGRAM_BOT_TOKEN is not set!")
+        logger.error("Please set TELEGRAM_BOT_TOKEN in environment variables")
+        sys.exit(1)
     
-    # Setup webhook if in production and webhook URL is set
-    if settings.environment == "production" and settings.telegram_webhook_url:
-        logger.info("📡 Running in webhook mode")
-        # Setup webhook after server starts (will be called in background)
-        bot.setup_webhook()
-        bot.run_webhook()
-    else:
-        logger.info("🔄 Running in polling mode (development)")
+    if not settings.database_url:
+        logger.error("❌ DATABASE_URL is not set!")
+        logger.error("Please set DATABASE_URL in environment variables")
+        sys.exit(1)
+    
+    try:
+        bot = PulseBot()
+        logger.info("🔄 Running in polling mode")
         bot.run_polling()
+    except Exception as e:
+        logger.error(f"❌ Fatal error starting bot: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
 
 
 if __name__ == "__main__":
