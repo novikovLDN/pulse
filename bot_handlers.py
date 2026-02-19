@@ -145,12 +145,13 @@ class T:
     PAYMENT_LINK = "Перейдите по ссылке для завершения оплаты:"
 
     # Мои анализы
-    RECENT_TITLE = "Мои анализы"
-    RECENT_EMPTY = "Сохранённых анализов нет. Загрузите первый анализ из главного меню."
-    RECENT_CHOOSE = "Выберите анализ для просмотра краткого содержания:"
-    DETAIL_SUMMARY = "Краткое содержание:"
+    RECENT_TITLE = "📁 Мои анализы"
+    RECENT_EMPTY = "Сохранённых анализов пока нет.\n\nЗагрузите первый анализ: отправьте фото или PDF бланка с результатами."
+    RECENT_CHOOSE = "Выберите анализ для просмотра или загрузите новый:"
+    DETAIL_SUMMARY = "📋 Краткое содержание:"
     DETAIL_FULL_REPORT_BTN = "📄 Полный отчёт"
     ANALYSIS_NOT_FOUND = "Анализ не найден."
+    RECENT_UPLOAD_BTN = "📤 Загрузить анализ"
 
     # Как пользоваться
     HOW_TO_USE_TITLE = "Как пользоваться"
@@ -365,6 +366,10 @@ class BotHandlers:
             user.username = update.effective_user.username
             self.db.commit()
         await self._show_terms(update)
+
+    async def cmd_analyses(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /analyses — открыть экран «Мои анализы»."""
+        await self._recent_analyses(update)
 
     async def _show_terms(self, update: Update):
         text = T.WELCOME
@@ -1044,6 +1049,7 @@ class BotHandlers:
                         InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{sid}"),
                         InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{sid}"),
                     ],
+                    [InlineKeyboardButton(T.RECENT_UPLOAD_BTN, callback_data="upload_analysis")],
                     [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
                 ]
                 await update.message.reply_text(T.AFTER_REPORT_CHOOSE, reply_markup=InlineKeyboardMarkup(kb))
@@ -1140,14 +1146,19 @@ class BotHandlers:
             return
         sessions = self.db.query(AnalysisSession).filter(AnalysisSession.user_id == user.id).order_by(AnalysisSession.created_at.desc()).limit(3).all()
         if not sessions:
-            await self._reply(update, T.RECENT_EMPTY, [[InlineKeyboardButton(T.BACK, callback_data="back_menu")]])
+            kb = [
+                [InlineKeyboardButton(T.RECENT_UPLOAD_BTN, callback_data="upload_analysis")],
+                [InlineKeyboardButton(T.BACK, callback_data="back_menu")],
+            ]
+            await self._reply(update, f"{T.RECENT_TITLE}\n\n{T.RECENT_EMPTY}", kb)
             return
         lines = []
         kb = []
         for s in sessions:
             d = s.created_at.strftime("%Y-%m-%d %H:%M")
-            lines.append(d)
-            kb.append([InlineKeyboardButton(d, callback_data=f"analysis_{s.id}")])
+            lines.append(f"• {d}")
+            kb.append([InlineKeyboardButton(f"📄 {d}", callback_data=f"analysis_{s.id}")])
+        kb.append([InlineKeyboardButton(T.RECENT_UPLOAD_BTN, callback_data="upload_analysis")])
         kb.append([InlineKeyboardButton(T.BACK, callback_data="back_menu")])
         await self._reply(update, f"{T.RECENT_TITLE}\n\n{T.RECENT_CHOOSE}\n\n" + "\n".join(lines), kb)
 
@@ -1173,6 +1184,7 @@ class BotHandlers:
                 InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
                 InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
             ],
+            [InlineKeyboardButton(T.RECENT_UPLOAD_BTN, callback_data="upload_analysis")],
             [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
         ]
         await self._reply(update, f"{T.DETAIL_SUMMARY}\n\n{summary}", kb)
@@ -1201,6 +1213,7 @@ class BotHandlers:
                     InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
                     InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
                 ],
+                [InlineKeyboardButton(T.RECENT_UPLOAD_BTN, callback_data="upload_analysis")],
                 [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
             ])
             return
@@ -1212,6 +1225,7 @@ class BotHandlers:
                 InlineKeyboardButton("📊 Сравнить", callback_data=f"compare_from_{session_id}"),
                 InlineKeyboardButton("❓ Уточнить", callback_data=f"follow_up_{session_id}"),
             ],
+            [InlineKeyboardButton(T.RECENT_UPLOAD_BTN, callback_data="upload_analysis")],
             [InlineKeyboardButton("🏠 В меню", callback_data="back_menu")],
         ]
         await update.effective_message.reply_text("Выберите действие:", reply_markup=InlineKeyboardMarkup(kb))

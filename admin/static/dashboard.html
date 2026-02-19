@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pulse — Админ-дашборд</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --border: #2d3a4d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 1rem;
+      min-height: 100vh;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+    }
+    .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .auth-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      max-width: 400px;
+      margin: 2rem auto;
+    }
+    .auth-box input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      margin-bottom: 1rem;
+    }
+    .auth-box button {
+      width: 100%;
+      padding: 0.75rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .auth-box button:hover { opacity: 0.9; }
+    .error { color: var(--danger); font-size: 0.9rem; margin-top: 0.5rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+    .card .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem; }
+    .card .value { font-size: 1.75rem; font-weight: 700; }
+    .card .value.green { color: var(--success); }
+    .card .value.blue { color: var(--accent); }
+    .card .value.yellow { color: var(--warning); }
+    .chart-wrap {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      height: 320px;
+    }
+    .chart-wrap h3 { font-size: 1rem; margin: 0 0 1rem 0; color: var(--muted); }
+    .chart-wrap canvas { max-height: 260px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+    .hidden { display: none !important; }
+    .refresh {
+      background: var(--border);
+      border: none;
+      color: var(--text);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+    .refresh:hover { background: var(--accent); color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="authScreen" class="auth-box">
+      <h2>Доступ к дашборду</h2>
+      <p class="subtitle">Введите секретный ключ администратора</p>
+      <input type="password" id="tokenInput" placeholder="Admin secret key" autocomplete="off" />
+      <button type="button" id="authBtn">Войти</button>
+      <p id="authError" class="error hidden"></p>
+    </div>
+
+    <div id="dashboard" class="hidden">
+      <h1>Pulse — Админ-дашборд</h1>
+      <p class="subtitle">Метрики и аналитика сервиса</p>
+      <button class="refresh" id="refreshBtn">Обновить данные</button>
+
+      <div class="grid" id="cards"></div>
+
+      <div class="two-col">
+        <div class="chart-wrap">
+          <h3>Регистрации по дням</h3>
+          <canvas id="chartUsers"></canvas>
+        </div>
+        <div class="chart-wrap">
+          <h3>Загруженные анализы по дням</h3>
+          <canvas id="chartAnalyses"></canvas>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <h3>Выручка по дням (₽)</h3>
+        <canvas id="chartRevenue"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const DASHBOARD_PATH = document.location.pathname.replace(/dashboard.*$/, '') || '';
+      const API = DASHBOARD_PATH + '/stats/dashboard';
+
+      function getToken() {
+        const params = new URLSearchParams(document.location.search);
+        return params.get('token') || sessionStorage.getItem('pulse_admin_token') || '';
+      }
+
+      function setToken(t) {
+        sessionStorage.setItem('pulse_admin_token', t);
+      }
+
+      let chartUsers = null, chartAnalyses = null, chartRevenue = null;
+
+      function drawCharts(data) {
+        const opts = { responsive: true, maintainAspectRatio: false };
+        const dateLabels = (arr) => (arr || []).map((x) => x.date);
+        const values = (arr, key) => (arr || []).map((x) => x[key]);
+
+        if (chartUsers) chartUsers.destroy();
+        chartUsers = new Chart(document.getElementById('chartUsers'), {
+          type: 'bar',
+          data: {
+            labels: dateLabels(data.series.users_daily),
+            datasets: [{ label: 'Пользователи', data: values(data.series.users_daily, 'count'), backgroundColor: 'rgba(88, 166, 255, 0.6)' }],
+          },
+          options: opts,
+        });
+
+        if (chartAnalyses) chartAnalyses.destroy();
+        chartAnalyses = new Chart(document.getElementById('chartAnalyses'), {
+          type: 'bar',
+          data: {
+            labels: dateLabels(data.series.analyses_daily),
+            datasets: [{ label: 'Анализы', data: values(data.series.analyses_daily, 'count'), backgroundColor: 'rgba(63, 185, 80, 0.6)' }],
+          },
+          options: opts,
+        });
+
+        if (chartRevenue) chartRevenue.destroy();
+        chartRevenue = new Chart(document.getElementById('chartRevenue'), {
+          type: 'line',
+          data: {
+            labels: dateLabels(data.series.revenue_daily),
+            datasets: [{ label: 'Выручка (₽)', data: values(data.series.revenue_daily, 'amount'), borderColor: '#d29922', fill: true, backgroundColor: 'rgba(210, 153, 34, 0.15)' }],
+          },
+          options: opts,
+        });
+      }
+
+      function renderCards(o) {
+        if (!o || !o.overview) return;
+        const ov = o.overview;
+        const cards = [
+          { label: 'Всего пользователей', value: ov.total_users, cls: '' },
+          { label: 'Активных подписок', value: ov.active_subscriptions, cls: 'green' },
+          { label: 'Всего анализов', value: ov.total_analyses, cls: 'blue' },
+          { label: 'Общая выручка (₽)', value: formatMoney(ov.total_revenue), cls: 'green' },
+          { label: 'Выручка за 30 дней (₽)', value: formatMoney(ov.revenue_last_30d), cls: 'blue' },
+          { label: 'Оплатили хотя бы раз', value: ov.paid_users, cls: '' },
+          { label: 'Конверсия (%)', value: ov.conversion_rate_percent, cls: 'yellow' },
+          { label: 'Basic активных', value: ov.basic_active, cls: '' },
+          { label: 'Premium активных', value: ov.premium_active, cls: 'green' },
+          { label: 'Активных за 7 дней', value: ov.active_users_7d, cls: '' },
+          { label: 'Активных за 30 дней', value: ov.active_users_30d, cls: '' },
+          { label: 'Рефералов', value: ov.referrals_total, cls: '' },
+          { label: 'Бонусных запросов выдано', value: ov.referrals_bonus_requests, cls: '' },
+          { label: 'Уведомлений создано', value: ov.notifications_created, cls: '' },
+          { label: 'Уведомлений отправлено', value: ov.notifications_sent, cls: 'green' },
+        ];
+        document.getElementById('cards').innerHTML = cards
+          .map(
+            (c) =>
+              `<div class="card"><div class="label">${c.label}</div><div class="value ${c.cls}">${c.value}</div></div>`
+          )
+          .join('');
+      }
+
+      function formatMoney(n) {
+        if (n == null) return '0';
+        return Number(n).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+      }
+
+      async function loadDashboard() {
+        const token = getToken();
+        if (!token) {
+          document.getElementById('authScreen').classList.remove('hidden');
+          document.getElementById('dashboard').classList.add('hidden');
+          return;
+        }
+        try {
+          const res = await fetch(API + '?days=30', {
+            headers: { Authorization: 'Bearer ' + token },
+          });
+          if (res.status === 401 || res.status === 403) {
+            sessionStorage.removeItem('pulse_admin_token');
+            document.getElementById('authScreen').classList.remove('hidden');
+            document.getElementById('dashboard').classList.add('hidden');
+            document.getElementById('authError').textContent = 'Неверный ключ. Введите снова.';
+            document.getElementById('authError').classList.remove('hidden');
+            return;
+          }
+          if (!res.ok) throw new Error(res.statusText);
+          const data = await res.json();
+          document.getElementById('authScreen').classList.add('hidden');
+          document.getElementById('dashboard').classList.remove('hidden');
+          renderCards(data);
+          drawCharts(data);
+        } catch (e) {
+          document.getElementById('authError').textContent = 'Ошибка загрузки: ' + e.message;
+          document.getElementById('authError').classList.remove('hidden');
+        }
+      }
+
+      document.getElementById('authBtn').addEventListener('click', function () {
+        const token = document.getElementById('tokenInput').value.trim();
+        if (!token) return;
+        setToken(token);
+        document.getElementById('authError').classList.add('hidden');
+        loadDashboard();
+      });
+
+      document.getElementById('refreshBtn').addEventListener('click', loadDashboard);
+
+      window.addEventListener('DOMContentLoaded', function () {
+        const token = getToken();
+        if (token) {
+          document.getElementById('tokenInput').value = '';
+          loadDashboard();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
