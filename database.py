@@ -50,6 +50,7 @@ class User(Base):
     used_requests = Column(Integer, default=0)  # Used requests count
     referrer_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Who referred this user
     referral_code = Column(String, unique=True, nullable=True, index=True)  # Unique referral code
+    username = Column(String, nullable=True, index=True)  # Telegram @username for admin search
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -168,6 +169,9 @@ def _migrate_add_columns(conn):
             conn.execute(text(sql))
     if not _column_exists(conn, "payments", "payment_date"):
         conn.execute(text("ALTER TABLE payments ADD COLUMN payment_date TIMESTAMP"))
+    if not _column_exists(conn, "users", "username"):
+        conn.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_username ON users(username)"))
     # Telegram user IDs can exceed 2^31; ensure BIGINT
     conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
     conn.execute(text("""

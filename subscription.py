@@ -68,6 +68,18 @@ def add_bonus(db: Session, user_id: int, amount: int) -> bool:
     return True
 
 
+def deactivate(db: Session, user_id: int) -> bool:
+    """Remove subscription from user (admin)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return False
+    user.subscription_status = "inactive"
+    user.subscription_expire_at = None
+    user.bonus_requests = 0
+    db.commit()
+    return True
+
+
 def expire_subscriptions(db: Session) -> int:
     q = db.query(User).filter(
         User.subscription_status == "active",
@@ -127,5 +139,6 @@ class SubscriptionManager:
     use_request = staticmethod(use_request)
     add_bonus_requests = staticmethod(add_bonus)
     expire_subscriptions = staticmethod(expire_subscriptions)
+    deactivate = staticmethod(deactivate)
     process_referral_bonus = staticmethod(process_referral_bonus)
     get_referral_stats = staticmethod(get_referral_stats)

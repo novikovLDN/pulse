@@ -10,12 +10,15 @@ from llm_service import LLMService
 from redis_client import FSMStorage
 from loguru import logger
 
+ADMIN_ID = 565638442
+
 # States
 class States:
     START, TERMS_ACCEPTED = "start", "terms_accepted"
     COLLECTING_AGE, COLLECTING_SEX, COLLECTING_SYMPTOMS = "collecting_age", "collecting_sex", "collecting_symptoms"
     COLLECTING_PREGNANCY, COLLECTING_CHRONIC, COLLECTING_MEDICATIONS = "collecting_pregnancy", "collecting_chronic", "collecting_medications"
     PROCESSING_FILE, WAITING_FOLLOW_UP = "processing_file", "waiting_follow_up"
+    ADMIN_WAIT_ID, ADMIN_WAIT_USERNAME = "admin_wait_id", "admin_wait_username"
 
 MSG_NEED_START = "Send /start first."
 MSG_NEED_SUB = "Subscription required."
@@ -51,6 +54,48 @@ class BotHandlers:
         await self._reply(update, MSG_NEED_START)
         return None
 
+    def _is_admin(self, telegram_id: int) -> bool:
+        return telegram_id == ADMIN_ID
+
+    async def admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message or update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("Нет доступа.")
+            return
+        await self._admin_dashboard(update)
+
+    async def _admin_dashboard(self, update: Update):
+        text = "Админ-панель. Выберите действие:"
+        kb = [
+            [InlineKeyboardButton("Поиск по ID", callback_data="admin_search_id")],
+            [InlineKeyboardButton("Поиск по username", callback_data="admin_search_username")],
+        ]
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+    async def _admin_user_card(self, update: Update, user: User):
+        exp = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "—"
+        uname = getattr(user, "username", None) or "—"
+        text = (
+            f"Пользователь\n\n"
+            f"ID (в боте): {user.id}\n"
+            f"Telegram ID: {user.telegram_id}\n"
+            f"Username: @{uname}\n"
+            f"Подписка: {user.subscription_status}\n"
+            f"Активна до: {exp}\n"
+            f"Запросы: тариф {user.total_requests or 0}, бонус {user.bonus_requests or 0}, использовано {user.used_requests or 0}"
+        )
+        kb = [
+            [
+                InlineKeyboardButton("Выдать 1 мес", callback_data=f"admin_grant_1m_{user.id}"),
+                InlineKeyboardButton("Выдать 3 мес", callback_data=f"admin_grant_3m_{user.id}"),
+            ],
+            [InlineKeyboardButton("Убрать подписку", callback_data=f"admin_remove_{user.id}")],
+            [InlineKeyboardButton("Назад", callback_data="admin_back")],
+        ]
+        await self._reply(update, text, kb)
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
         args = context.args or []
@@ -71,6 +116,9 @@ class BotHandlers:
         if not user.referral_code:
             user.generate_referral_code()
             self.db.commit()
+        if update.effective_user.username and getattr(user, "username", None) != update.effective_user.username:
+            user.username = update.effective_user.username
+            self.db.commit()
         await self._show_terms(update)
 
     async def _show_terms(self, update: Update):
@@ -83,6 +131,52 @@ class BotHandlers:
         q = update.callback_query
         await q.answer()
         uid, data = update.effective_user.id, q.data
+
+        if self._is_admin(uid):
+            if data == "admin_back":
+                await self._admin_dashboard(update)
+                return
+            if data == "admin_search_id":
+                FSMStorage.set_state(uid, States.ADMIN_WAIT_ID)
+                await q.edit_message_text("Введите Telegram ID пользователя (число):")
+                return
+            if data == "admin_search_username":
+                FSMStorage.set_state(uid, States.ADMIN_WAIT_USERNAME)
+                await q.edit_message_text("Введите username без @:")
+                return
+            if data.startswith("admin_grant_1m_"):
+                try:
+                    target_id = int(data.replace("admin_grant_1m_", ""))
+                    if SubscriptionManager.activate_subscription(self.db, target_id, "1month"):
+                        user = self.db.query(User).filter(User.id == target_id).first()
+                        await self._admin_user_card(update, user)
+                    else:
+                        await self._reply(update, "Ошибка выдачи подписки.")
+                except (ValueError, AttributeError):
+                    await self._reply(update, "Ошибка.")
+                return
+            if data.startswith("admin_grant_3m_"):
+                try:
+                    target_id = int(data.replace("admin_grant_3m_", ""))
+                    if SubscriptionManager.activate_subscription(self.db, target_id, "3months"):
+                        user = self.db.query(User).filter(User.id == target_id).first()
+                        await self._admin_user_card(update, user)
+                    else:
+                        await self._reply(update, "Ошибка выдачи подписки.")
+                except (ValueError, AttributeError):
+                    await self._reply(update, "Ошибка.")
+                return
+            if data.startswith("admin_remove_"):
+                try:
+                    target_id = int(data.replace("admin_remove_", ""))
+                    if SubscriptionManager.deactivate(self.db, target_id):
+                        user = self.db.query(User).filter(User.id == target_id).first()
+                        await self._admin_user_card(update, user)
+                    else:
+                        await self._reply(update, "Ошибка.")
+                except (ValueError, AttributeError):
+                    await self._reply(update, "Ошибка.")
+                return
 
         if data == "terms":
             await q.edit_message_text("Terms: informational use only, not diagnosis. 18+. Data retention 60 days.")
@@ -281,9 +375,34 @@ class BotHandlers:
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = update.effective_user.id
-        text = update.message.text
+        text = (update.message.text or "").strip()
         state = FSMStorage.get_state(uid)
         fsm = FSMStorage.get_data(uid)
+
+        if self._is_admin(uid) and state == States.ADMIN_WAIT_ID:
+            FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+            try:
+                tid = int(text)
+                user = self.db.query(User).filter(User.telegram_id == tid).first()
+                if user:
+                    await self._admin_user_card(update, user)
+                else:
+                    await update.message.reply_text("Пользователь не найден.")
+            except ValueError:
+                await update.message.reply_text("Введите число (Telegram ID).")
+            return
+        if self._is_admin(uid) and state == States.ADMIN_WAIT_USERNAME:
+            FSMStorage.set_state(uid, States.TERMS_ACCEPTED)
+            name = text.lstrip("@").strip().lower()
+            if not name:
+                await update.message.reply_text("Введите username.")
+                return
+            user = self.db.query(User).filter(User.username.ilike(name)).first()
+            if user:
+                await self._admin_user_card(update, user)
+            else:
+                await update.message.reply_text("Пользователь не найден.")
+            return
 
         if state == States.COLLECTING_AGE:
             fsm["age"] = text

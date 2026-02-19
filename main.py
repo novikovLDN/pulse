@@ -21,6 +21,7 @@ class PulseBot:
     def __init__(self):
         self.application = ApplicationBuilder().token(settings.telegram_bot_token).build()
         self.application.add_handler(CommandHandler("start", self._wrap(BotHandlers(None).start)))
+        self.application.add_handler(CommandHandler("admin", self._wrap(BotHandlers(None).admin)))
         self.application.add_handler(CallbackQueryHandler(self._wrap(BotHandlers(None).handle_callback)))
         self.application.add_handler(MessageHandler(
             filters.Document.ALL | filters.PHOTO, self._wrap(BotHandlers(None).handle_file)))
