@@ -121,12 +121,20 @@ class PaymentService:
             if event_type == "payment.succeeded" or payment_status == "succeeded":
                 payment_record.status = "completed"
                 payment_record.completed_at = datetime.utcnow()
+                payment_record.payment_date = datetime.utcnow()
                 
                 # Activate subscription
                 SubscriptionManager.activate_subscription(
                     db,
                     payment_record.user_id,
                     payment_record.tariff
+                )
+                
+                # Process referral bonus if user was referred
+                SubscriptionManager.process_referral_bonus(
+                    db,
+                    payment_record.user_id,
+                    payment_record.id
                 )
                 
                 db.commit()

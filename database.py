@@ -4,6 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from config import settings
+import secrets
 
 Base = declarative_base()
 
@@ -44,11 +45,24 @@ class User(Base):
     telegram_id = Column(Integer, unique=True, index=True, nullable=False)
     subscription_status = Column(String, default="inactive")  # active, inactive, expired
     subscription_expire_at = Column(DateTime, nullable=True)
+    total_requests = Column(Integer, default=0)  # Total requests from tariff
+    bonus_requests = Column(Integer, default=0)  # Bonus requests from referrals
+    used_requests = Column(Integer, default=0)  # Used requests count
+    referrer_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Who referred this user
+    referral_code = Column(String, unique=True, nullable=True, index=True)  # Unique referral code
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
-    payments = relationship("Payment", back_populates="user")
+    payments = relationship("Payment", back_populates="user", foreign_keys="Payment.user_id")
     analysis_sessions = relationship("AnalysisSession", back_populates="user")
+    referrals_made = relationship("Referral", back_populates="referrer", foreign_keys="Referral.referrer_id")
+    referred_by_rel = relationship("User", remote_side=[id], foreign_keys=[referrer_id])
+    
+    def generate_referral_code(self):
+        """Generate unique referral code."""
+        if not self.referral_code:
+            self.referral_code = secrets.token_urlsafe(8)[:12].upper()
+        return self.referral_code
 
 
 class Payment(Base):
@@ -63,9 +77,11 @@ class Payment(Base):
     yookassa_payment_id = Column(String, unique=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
+    payment_date = Column(DateTime, nullable=True)  # Actual payment date
     
     # Relationships
-    user = relationship("User", back_populates="payments")
+    user = relationship("User", back_populates="payments", foreign_keys=[user_id])
+    referral = relationship("Referral", back_populates="payment", uselist=False)
 
 
 class AnalysisSession(Base):
@@ -109,6 +125,24 @@ class FollowUpQuestion(Base):
     
     # Relationships
     session = relationship("AnalysisSession", back_populates="follow_up_questions")
+
+
+class Referral(Base):
+    """Referral tracking model."""
+    __tablename__ = "referrals"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    referrer_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Who referred
+    referred_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Who was referred
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=False)  # Payment that triggered bonus
+    bonus_requests = Column(Integer, default=5)  # Bonus requests awarded
+    payment_date = Column(DateTime, nullable=False)  # When payment was completed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    referrer = relationship("User", back_populates="referrals_made", foreign_keys=[referrer_id])
+    referred_user = relationship("User", foreign_keys=[referred_user_id])
+    payment = relationship("Payment", back_populates="referral", foreign_keys=[payment_id])
 
 
 def init_db():

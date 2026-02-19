@@ -45,14 +45,36 @@ class BotHandlers:
             self.file_processor = None
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command."""
+        """Handle /start command with referral code support."""
         user_id = update.effective_user.id
+        command_args = context.args
         
         # Check if user exists
         user = self.db.query(User).filter(User.telegram_id == user_id).first()
         if not user:
             user = User(telegram_id=user_id)
+            # Check for referral code
+            if command_args and len(command_args) > 0:
+                referral_code = command_args[0].upper()
+                referrer = self.db.query(User).filter(User.referral_code == referral_code).first()
+                if referrer and referrer.id != user.id:
+                    user.referrer_id = referrer.id
+                    logger.info(f"User {user_id} registered with referral code from user {referrer.id}")
             self.db.add(user)
+            self.db.commit()
+        else:
+            # Existing user - check referral code if provided
+            if command_args and len(command_args) > 0 and not user.referrer_id:
+                referral_code = command_args[0].upper()
+                referrer = self.db.query(User).filter(User.referral_code == referral_code).first()
+                if referrer and referrer.id != user.id:
+                    user.referrer_id = referrer.id
+                    self.db.commit()
+                    logger.info(f"User {user_id} linked to referrer {referrer.id}")
+        
+        # Generate referral code if not exists
+        if not user.referral_code:
+            user.generate_referral_code()
             self.db.commit()
         
         # Show terms
@@ -64,7 +86,7 @@ class BotHandlers:
 
 This service provides structured interpretation of laboratory results using an evidence-based approach.
 
-⚠️ IMPORTANT DISCLAIMER:
+IMPORTANT DISCLAIMER:
 This service is NOT a medical diagnosis and does NOT replace consultation with a physician.
 This service is for informational purposes only.
 You must be 18 years or older to use this service.
@@ -75,8 +97,8 @@ By using this service, you acknowledge that:
 - The service is for informational purposes only"""
         
         keyboard = [
-            [InlineKeyboardButton("📄 Terms of Use", callback_data="terms")],
-            [InlineKeyboardButton("✅ Accept and Continue", callback_data="accept_terms")]
+            [InlineKeyboardButton("Terms of Use", callback_data="terms")],
+            [InlineKeyboardButton("Accept and Continue", callback_data="accept_terms")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -112,7 +134,15 @@ By using this service, you acknowledge that:
         elif data == "recent_analyses":
             await self.show_recent_analyses(update, context)
         elif data == "subscription":
-            await self.show_subscription_menu(update, context)
+            await self.show_subscription_status(update, context)
+        elif data == "subscription_plans":
+            await self.show_subscription_plans(update, context)
+        elif data == "loyalty":
+            await self.show_loyalty_program(update, context)
+        elif data == "get_referral_link":
+            await self.show_referral_link(update, context)
+        elif data == "referral_stats":
+            await self.show_referral_stats(update, context)
         elif data.startswith("plan_"):
             plan = data.replace("plan_", "")
             await self.handle_subscription_payment(update, context, plan)
@@ -120,20 +150,27 @@ By using this service, you acknowledge that:
             analysis_id = int(data.replace("analysis_", ""))
             await self.show_analysis_details(update, context, analysis_id)
         elif data.startswith("compare_"):
-            session_ids = data.replace("compare_", "").split("_")
-            await self.handle_comparison(update, context, session_ids)
+            if data.startswith("compare_from_"):
+                # Handle compare from specific analysis
+                session_id = int(data.replace("compare_from_", ""))
+                await self.handle_compare_from_analysis(update, context, session_id)
+            else:
+                session_ids = data.replace("compare_", "").split("_")
+                await self.handle_comparison(update, context, session_ids)
+        elif data.startswith("follow_up_"):
+            await self.handle_follow_up_request(update, context)
         elif data == "back_menu":
             FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
             await self.show_main_menu(update, context)
         elif data == "about":
             await query.edit_message_text(
-                "ℹ️ About Service\n\n"
+                "About Service\n\n"
                 "Clinical AI Assistant provides structured interpretation of laboratory test results.\n\n"
                 "Features:\n"
-                "• Upload PDF or image files with lab results\n"
-                "• Get structured, evidence-based analysis\n"
-                "• Compare multiple analyses\n"
-                "• Ask follow-up questions\n\n"
+                "- Upload PDF or image files with lab results\n"
+                "- Get structured, evidence-based analysis\n"
+                "- Compare multiple analyses\n"
+                "- Ask follow-up questions\n\n"
                 "This service is for informational purposes only and does not replace medical consultation."
             )
     
@@ -148,11 +185,12 @@ By using this service, you acknowledge that:
         message = "Select an action:"
         
         keyboard = [
-            [InlineKeyboardButton("📤 Upload analysis", callback_data="upload_analysis")],
-            [InlineKeyboardButton("📊 Compare analyses", callback_data="compare_analyses")],
-            [InlineKeyboardButton("📁 Recent analyses", callback_data="recent_analyses")],
-            [InlineKeyboardButton("💳 Subscription", callback_data="subscription")],
-            [InlineKeyboardButton("ℹ️ About service", callback_data="about")]
+            [InlineKeyboardButton("Upload analysis", callback_data="upload_analysis")],
+            [InlineKeyboardButton("Compare", callback_data="compare_analyses")],
+            [InlineKeyboardButton("Recent analyses", callback_data="recent_analyses")],
+            [InlineKeyboardButton("Subscription", callback_data="subscription")],
+            [InlineKeyboardButton("Loyalty Program", callback_data="loyalty")],
+            [InlineKeyboardButton("About", callback_data="about")]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -162,18 +200,123 @@ By using this service, you acknowledge that:
         else:
             await update.message.reply_text(message, reply_markup=reply_markup)
     
+    async def show_subscription_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show subscription status screen."""
+        user_id = update.effective_user.id
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        has_active = SubscriptionManager.is_subscription_active(user)
+        
+        if has_active:
+            expire_date = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "Unknown"
+            available, total, bonus, used = SubscriptionManager.get_available_requests(user)
+            
+            message = (
+                f"Subscription Status\n\n"
+                f"Active until: {expire_date}\n"
+                f"Available requests: {available} of {total + bonus}\n"
+                f"Bonus requests: +{bonus}\n"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("Renew subscription", callback_data="subscription_plans")],
+                [InlineKeyboardButton("Back", callback_data="back_menu")]
+            ]
+        else:
+            message = "To access analysis features, an active subscription is required."
+            keyboard = [
+                [InlineKeyboardButton("Subscribe", callback_data="subscription_plans")],
+                [InlineKeyboardButton("Back", callback_data="back_menu")]
+            ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+    
+    async def show_subscription_plans(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show subscription plans."""
+        keyboard = [
+            [InlineKeyboardButton("1 month — 299 ₽ (3 requests)", callback_data="plan_1month")],
+            [InlineKeyboardButton("3 months — 799 ₽ (15 requests)", callback_data="plan_3months")],
+            [InlineKeyboardButton("6 months — 1399 ₽ (unlimited)", callback_data="plan_6months")],
+            [InlineKeyboardButton("12 months — 2499 ₽ (unlimited)", callback_data="plan_12months")],
+            [InlineKeyboardButton("Back", callback_data="subscription")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.edit_message_text("Select subscription plan:", reply_markup=reply_markup)
+    
+    async def show_loyalty_program(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show loyalty program screen."""
+        message = (
+            "Loyalty Program Pulse\n\n"
+            "If a user subscribes using your personal referral link, "
+            "you receive 5 additional requests for each payment.\n\n"
+            "Bonus is valid within active subscription period.\n"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("Get personal link", callback_data="get_referral_link")],
+            [InlineKeyboardButton("Referral statistics", callback_data="referral_stats")],
+            [InlineKeyboardButton("Back", callback_data="back_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+    
+    async def show_referral_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show referral link."""
+        user_id = update.effective_user.id
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        if not user.referral_code:
+            user.generate_referral_code()
+            self.db.commit()
+        
+        bot_username = (await context.bot.get_me()).username
+        referral_link = f"https://t.me/{bot_username}?start={user.referral_code}"
+        
+        message = (
+            f"Your personal referral link:\n\n"
+            f"{referral_link}\n\n"
+            f"Share this link with others. For each successful payment "
+            f"by a referred user, you will receive 5 bonus requests."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("Back", callback_data="loyalty")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+    
+    async def show_referral_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show referral statistics."""
+        user_id = update.effective_user.id
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        stats = SubscriptionManager.get_referral_stats(self.db, user.id)
+        
+        message = (
+            f"Referral Statistics\n\n"
+            f"Total referrals: {stats['total_referrals']}\n"
+            f"Total bonus requests: {stats['total_bonus']}\n"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("Back", callback_data="loyalty")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+    
     async def handle_upload_request(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle upload analysis request."""
         user_id = update.effective_user.id
         
-        # Check subscription
+        # Check subscription and access
         user = self.db.query(User).filter(User.telegram_id == user_id).first()
-        if not SubscriptionManager.can_perform_analysis(self.db, user_id):
+        if not SubscriptionManager.can_perform_analysis(self.db, user.id):
             await update.callback_query.edit_message_text(
-                "❌ You need an active subscription to upload analyses.\n\n"
+                "You need an active subscription to upload analyses.\n\n"
                 "Please subscribe to continue."
             )
-            await self.show_subscription_menu(update, context)
+            await self.show_subscription_status(update, context)
             return
         
         await update.callback_query.edit_message_text(
@@ -189,6 +332,16 @@ By using this service, you acknowledge that:
         state = FSMStorage.get_state(user_id)
         
         if state != States.PROCESSING_FILE:
+            return
+        
+        # Check subscription before processing
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        if not SubscriptionManager.can_perform_analysis(self.db, user.id):
+            await update.message.reply_text(
+                "Your subscription has expired. Please renew to continue."
+            )
+            await self.show_subscription_status(update, context)
+            FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
             return
         
         file = update.message.document or update.message.photo
@@ -215,12 +368,12 @@ By using this service, you acknowledge that:
         
         try:
             if not self.file_processor:
-                await update.message.reply_text("❌ File processing service is not available. Please contact support.")
+                await update.message.reply_text("File processing service is not available. Please contact support.")
                 FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
                 return
             
             if not self.llm_service or not self.llm_service.enabled:
-                await update.message.reply_text("❌ LLM service is not configured. Please contact support.")
+                await update.message.reply_text("LLM service is not configured. Please contact support.")
                 FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
                 return
             
@@ -258,6 +411,8 @@ By using this service, you acknowledge that:
             
         except Exception as e:
             logger.error(f"Error processing file: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             await update.message.reply_text("Error processing file. Please try again.")
             FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
     
@@ -315,6 +470,16 @@ By using this service, you acknowledge that:
             await update.message.reply_text("Generating clinical report... Please wait.")
             
             try:
+                # Check subscription again before generating report
+                user = self.db.query(User).filter(User.telegram_id == user_id).first()
+                if not SubscriptionManager.can_perform_analysis(self.db, user.id):
+                    await update.message.reply_text(
+                        "Your subscription has expired. Please renew to continue."
+                    )
+                    await self.show_subscription_status(update, context)
+                    FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
+                    return
+                
                 session_id = fsm_data['session_id']
                 structured_data = fsm_data['structured_data']
                 clinical_context = {
@@ -328,7 +493,7 @@ By using this service, you acknowledge that:
                 
                 # Generate report
                 if not self.llm_service or not self.llm_service.enabled:
-                    await update.message.reply_text("❌ LLM service is not configured. Cannot generate report.")
+                    await update.message.reply_text("LLM service is not configured. Cannot generate report.")
                     FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
                     return
                 
@@ -346,31 +511,37 @@ By using this service, you acknowledge that:
                 structured_result.report = report
                 self.db.commit()
                 
-                # Send report
-                await update.message.reply_text(f"📊 Clinical Report:\n\n{report}")
+                # Use request
+                SubscriptionManager.use_request(self.db, user.id)
                 
                 # Cleanup old analyses (keep only last 3)
                 from cleanup import cleanup_user_analyses
                 cleanup_user_analyses(user.id, keep_count=3)
                 
-                # Decrement analysis count
-                user = self.db.query(User).filter(User.telegram_id == user_id).first()
-                remaining = SubscriptionManager.get_remaining_analyses(self.db, user.id)
-                if remaining is not None:
-                    await update.message.reply_text(f"Remaining analyses: {remaining}")
+                # Send report (NO EMOJI in report)
+                await update.message.reply_text(f"Clinical Report:\n\n{report}")
                 
-                # Offer follow-up questions
-                await update.message.reply_text(
-                    "You can ask up to 2 follow-up questions about this analysis.\n"
-                    "Type your question or return to main menu."
-                )
+                # Show action buttons after report
+                keyboard = [
+                    [
+                        InlineKeyboardButton("Compare", callback_data=f"compare_from_{session_id}"),
+                        InlineKeyboardButton("Clarify", callback_data=f"follow_up_{session_id}")
+                    ],
+                    [InlineKeyboardButton("To Menu", callback_data="back_menu")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text("Select action:", reply_markup=reply_markup)
                 
-                FSMStorage.set_state(user_id, States.WAITING_FOLLOW_UP)
+                # Store session_id for follow-up
+                fsm_data['current_session_id'] = session_id
                 fsm_data['follow_up_count'] = 0
                 FSMStorage.set_data(user_id, fsm_data)
+                FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
                 
             except Exception as e:
                 logger.error(f"Error generating report: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 await update.message.reply_text("Error generating report. Please try again.")
                 FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
         
@@ -391,16 +562,20 @@ By using this service, you acknowledge that:
             
             try:
                 if not self.llm_service or not self.llm_service.enabled:
-                    await update.message.reply_text("❌ LLM service is not configured. Cannot answer questions.")
+                    await update.message.reply_text("LLM service is not configured. Cannot answer questions.")
                     return
                 
-                session_id = fsm_data['session_id']
+                session_id = fsm_data.get('current_session_id') or fsm_data.get('session_id')
+                if not session_id:
+                    await update.message.reply_text("Session not found.")
+                    return
+                
                 structured_result = self.db.query(StructuredResult).filter(
                     StructuredResult.session_id == session_id
                 ).first()
                 
                 if not structured_result:
-                    await update.message.reply_text("❌ Analysis not found.")
+                    await update.message.reply_text("Analysis not found.")
                     return
                 
                 answer = self.llm_service.answer_follow_up_question(
@@ -419,6 +594,7 @@ By using this service, you acknowledge that:
                 self.db.add(follow_up)
                 self.db.commit()
                 
+                # Send answer (NO EMOJI)
                 await update.message.reply_text(answer)
                 
                 follow_up_count += 1
@@ -426,19 +602,28 @@ By using this service, you acknowledge that:
                 FSMStorage.set_data(user_id, fsm_data)
                 
                 if follow_up_count < 2:
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("Clarify", callback_data=f"follow_up_{session_id}"),
+                            InlineKeyboardButton("To Menu", callback_data="back_menu")
+                        ]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
                     await update.message.reply_text(
-                        f"You can ask {2 - follow_up_count} more question(s) or return to main menu."
+                        f"You can ask {2 - follow_up_count} more question(s).",
+                        reply_markup=reply_markup
                     )
                 else:
                     await update.message.reply_text(
-                        "You have reached the limit of 2 follow-up questions.\n"
-                        "Returning to main menu."
+                        "You have reached the limit of 2 follow-up questions."
                     )
                     await self.show_main_menu(update, context)
                     FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
                 
             except Exception as e:
                 logger.error(f"Error answering follow-up question: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 await update.message.reply_text("Error processing question. Please try again.")
         
         else:
@@ -446,38 +631,54 @@ By using this service, you acknowledge that:
             await self.show_main_menu(update, context)
             FSMStorage.set_state(user_id, States.TERMS_ACCEPTED)
     
-    async def show_subscription_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show subscription menu."""
+    async def handle_follow_up_request(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle follow-up request from button."""
+        query = update.callback_query
+        await query.answer()
+        
         user_id = update.effective_user.id
+        
+        # Check subscription
         user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        if not SubscriptionManager.is_subscription_active(user):
+            await query.edit_message_text(
+                "Your subscription has expired. Please renew to continue."
+            )
+            await self.show_subscription_status(update, context)
+            return
         
-        has_active = SubscriptionManager.is_subscription_active(user)
-        
-        if has_active:
-            expire_date = user.subscription_expire_at.strftime("%Y-%m-%d") if user.subscription_expire_at else "Unknown"
-            remaining = SubscriptionManager.get_remaining_analyses(self.db, user.id)
-            remaining_text = "Unlimited" if remaining is None else str(remaining)
-            
-            message = f"✅ Active Subscription\n\nExpires: {expire_date}\nRemaining analyses: {remaining_text}"
+        # Extract session_id from callback data
+        if query.data.startswith("follow_up_"):
+            session_id = int(query.data.replace("follow_up_", ""))
         else:
-            message = "To access analysis features, an active subscription is required."
+            # Get from FSM data
+            fsm_data = FSMStorage.get_data(user_id)
+            session_id = fsm_data.get('current_session_id') or fsm_data.get('session_id')
         
-        keyboard = [
-            [InlineKeyboardButton("1 month — 299 ₽ (3 analyses)", callback_data="plan_1month")],
-            [InlineKeyboardButton("3 months — 799 ₽ (15 analyses)", callback_data="plan_3months")],
-            [InlineKeyboardButton("6 months — 1399 ₽ (unlimited)", callback_data="plan_6months")],
-            [InlineKeyboardButton("12 months — 2499 ₽ (unlimited)", callback_data="plan_12months")],
-        ]
+        if not session_id:
+            await query.edit_message_text("Session not found.")
+            return
         
-        if has_active:
-            keyboard.append([InlineKeyboardButton("← Back to Menu", callback_data="back_menu")])
+        # Check follow-up count
+        fsm_data = FSMStorage.get_data(user_id)
+        follow_up_count = fsm_data.get('follow_up_count', 0)
         
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        if follow_up_count >= 2:
+            await query.edit_message_text(
+                "You have reached the limit of 2 follow-up questions."
+            )
+            await self.show_main_menu(update, context)
+            return
         
-        if hasattr(update, 'callback_query') and update.callback_query:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
-        else:
-            await update.message.reply_text(message, reply_markup=reply_markup)
+        # Set state and ask for question
+        fsm_data['current_session_id'] = session_id
+        FSMStorage.set_data(user_id, fsm_data)
+        FSMStorage.set_state(user_id, States.WAITING_FOLLOW_UP)
+        
+        await query.edit_message_text(
+            f"Ask your question about this analysis.\n\n"
+            f"You can ask {2 - follow_up_count} more question(s)."
+        )
     
     async def handle_subscription_payment(self, update: Update, context: ContextTypes.DEFAULT_TYPE, plan: str):
         """Handle subscription payment."""
@@ -494,12 +695,22 @@ By using this service, you acknowledge that:
             )
         except Exception as e:
             logger.error(f"Error creating payment: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             await update.callback_query.edit_message_text("Error creating payment. Please try again.")
     
     async def show_recent_analyses(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show recent analyses."""
         user_id = update.effective_user.id
         user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        # Check subscription
+        if not SubscriptionManager.is_subscription_active(user):
+            await update.callback_query.edit_message_text(
+                "Your subscription has expired. Please renew to view analyses."
+            )
+            await self.show_subscription_status(update, context)
+            return
         
         # Get last 3 analyses
         sessions = self.db.query(AnalysisSession).filter(
@@ -515,19 +726,30 @@ By using this service, you acknowledge that:
         
         for session in sessions:
             date_str = session.created_at.strftime("%Y-%m-%d %H:%M")
-            message += f"📊 Analysis from {date_str}\n"
+            message += f"Analysis from {date_str}\n"
             keyboard.append([InlineKeyboardButton(
                 f"View {date_str}",
                 callback_data=f"analysis_{session.id}"
             )])
         
-        keyboard.append([InlineKeyboardButton("← Back to Menu", callback_data="back_menu")])
+        keyboard.append([InlineKeyboardButton("Back", callback_data="back_menu")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
     
     async def show_analysis_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE, session_id: int):
         """Show analysis details."""
+        user_id = update.effective_user.id
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        # Check subscription
+        if not SubscriptionManager.is_subscription_active(user):
+            await update.callback_query.edit_message_text(
+                "Your subscription has expired. Please renew to view analyses."
+            )
+            await self.show_subscription_status(update, context)
+            return
+        
         structured_result = self.db.query(StructuredResult).filter(
             StructuredResult.session_id == session_id
         ).first()
@@ -536,14 +758,81 @@ By using this service, you acknowledge that:
             await update.callback_query.edit_message_text("Analysis not found.")
             return
         
-        await update.callback_query.edit_message_text(
-            f"📊 Analysis Report:\n\n{structured_result.report}"
-        )
+        # Show report (NO EMOJI)
+        message = f"Analysis Report:\n\n{structured_result.report}"
+        
+        # Add action buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("Compare", callback_data=f"compare_from_{session_id}"),
+                InlineKeyboardButton("Clarify", callback_data=f"follow_up_{session_id}")
+            ],
+            [InlineKeyboardButton("Back", callback_data="recent_analyses")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+    
+    async def handle_compare_from_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE, session_id: int):
+        """Handle compare request from specific analysis."""
+        user_id = update.effective_user.id
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        # Check subscription
+        if not SubscriptionManager.is_subscription_active(user):
+            await update.callback_query.edit_message_text(
+                "Your subscription has expired. Please renew to compare analyses."
+            )
+            await self.show_subscription_status(update, context)
+            return
+        
+        # Get current analysis
+        current_session = self.db.query(AnalysisSession).filter(AnalysisSession.id == session_id).first()
+        if not current_session:
+            await update.callback_query.edit_message_text("Analysis not found.")
+            return
+        
+        # Get other analyses (last 3, excluding current)
+        sessions = self.db.query(AnalysisSession).filter(
+            AnalysisSession.user_id == user.id,
+            AnalysisSession.id != session_id
+        ).order_by(AnalysisSession.created_at.desc()).limit(3).all()
+        
+        if len(sessions) < 1:
+            await update.callback_query.edit_message_text(
+                "You need at least one more analysis to compare.\n"
+                "Please upload more analyses first."
+            )
+            return
+        
+        message = f"Select analysis to compare with {current_session.created_at.strftime('%Y-%m-%d')}:\n\n"
+        keyboard = []
+        
+        for session in sessions:
+            date_str = session.created_at.strftime("%Y-%m-%d")
+            message += f"- {date_str}\n"
+            keyboard.append([InlineKeyboardButton(
+                f"Compare with {date_str}",
+                callback_data=f"compare_{session_id}_{session.id}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("Back", callback_data=f"analysis_{session_id}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
     
     async def handle_compare_request(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle compare analyses request."""
         user_id = update.effective_user.id
         user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        # Check subscription
+        if not SubscriptionManager.is_subscription_active(user):
+            await update.callback_query.edit_message_text(
+                "Your subscription has expired. Please renew to compare analyses."
+            )
+            await self.show_subscription_status(update, context)
+            return
         
         # Get last 3 analyses
         sessions = self.db.query(AnalysisSession).filter(
@@ -581,13 +870,24 @@ By using this service, you acknowledge that:
                 callback_data=f"compare_{sessions[1].id}_{sessions[2].id}"
             )])
         
-        keyboard.append([InlineKeyboardButton("← Back to Menu", callback_data="back_menu")])
+        keyboard.append([InlineKeyboardButton("Back", callback_data="back_menu")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
     
     async def handle_comparison(self, update: Update, context: ContextTypes.DEFAULT_TYPE, session_ids: list):
         """Handle analysis comparison."""
+        user_id = update.effective_user.id
+        user = self.db.query(User).filter(User.telegram_id == user_id).first()
+        
+        # Check subscription
+        if not SubscriptionManager.is_subscription_active(user):
+            await update.callback_query.edit_message_text(
+                "Your subscription has expired. Please renew to compare analyses."
+            )
+            await self.show_subscription_status(update, context)
+            return
+        
         if len(session_ids) < 2:
             await update.callback_query.edit_message_text("Invalid comparison request.")
             return
@@ -611,7 +911,7 @@ By using this service, you acknowledge that:
         
         try:
             if not self.llm_service or not self.llm_service.enabled:
-                await update.callback_query.edit_message_text("❌ LLM service is not configured. Cannot compare analyses.")
+                await update.callback_query.edit_message_text("LLM service is not configured. Cannot compare analyses.")
                 return
             
             session1 = self.db.query(AnalysisSession).filter(AnalysisSession.id == session1_id).first()
@@ -630,9 +930,17 @@ By using this service, you acknowledge that:
                 clinical_context2
             )
             
-            await update.callback_query.edit_message_text(
-                f"📊 Comparison Report:\n\n{comparison_report}"
-            )
+            # Show comparison report (NO EMOJI)
+            message = f"Comparison Report:\n\n{comparison_report}"
+            
+            keyboard = [
+                [InlineKeyboardButton("Back", callback_data="back_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error comparing analyses: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             await update.callback_query.edit_message_text("Error comparing analyses. Please try again.")
