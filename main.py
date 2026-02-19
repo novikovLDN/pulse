@@ -16,7 +16,6 @@ from database import init_db, get_db, SessionLocal
 from bot_handlers import BotHandlers
 from subscription import SubscriptionManager
 from scheduler import setup_scheduler
-from server import run_server
 from redis_client import redis_available, redis_client
 from config import settings
 from loguru import logger
@@ -132,65 +131,10 @@ class PulseBot:
         logger.info("🔄 Starting bot in polling mode...")
         self.application.post_init = self.post_init
         
-        # Start webhook server for YooKassa and admin API FIRST (before polling)
-        import threading
-        import time
-        
-        port = int(os.getenv("PORT", 8080))
-        
-        # Start server in background thread
-        def start_webhook_server():
-            try:
-                logger.info(f"🚀 Starting webhook server on port {port} for YooKassa and admin API...")
-                run_server(self.application, host="0.0.0.0", port=port)
-            except Exception as e:
-                logger.error(f"❌ Error starting webhook server: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-        
-        server_thread = threading.Thread(target=start_webhook_server, daemon=True)
-        server_thread.start()
-        
-        # Wait for server to be ready - check health endpoint
-        logger.info("⏳ Waiting for server to start...")
-        max_wait = 30
-        server_started = False
-        
-        for i in range(max_wait):
-            try:
-                import socket
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(1)
-                result = sock.connect_ex(('0.0.0.0', port))
-                sock.close()
-                if result == 0:
-                    # Port is open, try HTTP health check
-                    try:
-                        import urllib.request
-                        response = urllib.request.urlopen(f"http://localhost:{port}/health", timeout=2)
-                        if response.getcode() == 200:
-                            logger.info(f"✅ Server is ready on port {port}")
-                            server_started = True
-                            break
-                    except Exception:
-                        pass  # Port open but HTTP not ready yet
-            except Exception:
-                pass
-            time.sleep(1)
-        
-        if not server_started:
-            logger.warning(f"⚠️ Server startup check timeout after {max_wait}s, but continuing...")
-            logger.warning("⚠️ Healthcheck may fail initially, but server should start soon")
-        
         # Run bot in polling mode (this blocks)
         logger.info("✅ Bot is ready, starting polling...")
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
     
-    def run_webhook(self):
-        """Run bot in webhook mode with unified server."""
-        # This method is deprecated - using polling instead
-        logger.warning("⚠️ Webhook mode is deprecated, using polling instead")
-        self.run_polling()
 
 
 def main():
@@ -202,7 +146,6 @@ def main():
     # Check environment variables
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Mode: Polling")
-    logger.info(f"Port: {os.getenv('PORT', '8080')}")
     
     # Validate critical settings
     if not settings.telegram_bot_token:
